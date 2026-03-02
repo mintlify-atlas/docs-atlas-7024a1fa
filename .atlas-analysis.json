@@ -1,0 +1,163 @@
+{
+  "projectType": "saas",
+  "projectName": "Sovran",
+  "projectDescription": "A mobile Bitcoin wallet with Cashu ecash, Lightning payments, Nostr messaging, and NFC support",
+  "theme": "aspen",
+  "primaryColor": "#F7931A",
+  "lightColor": "#FFB84D",
+  "darkColor": "#C77A15",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/wallet",
+              "features/lightning-payments",
+              "features/ecash-tokens",
+              "features/multi-account",
+              "features/nfc-payments",
+              "features/qr-scanner"
+            ]
+          },
+          {
+            "group": "Cashu & Mints",
+            "pages": [
+              "cashu/overview",
+              "cashu/mint-management",
+              "cashu/know-your-mint",
+              "cashu/mint-swapping",
+              "cashu/wallet-rebalancing",
+              "cashu/payment-requests"
+            ]
+          },
+          {
+            "group": "Nostr Integration",
+            "pages": [
+              "nostr/overview",
+              "nostr/identity",
+              "nostr/direct-messages",
+              "nostr/contacts",
+              "nostr/user-profiles",
+              "nostr/lightning-address"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/transaction-filters",
+              "advanced/transaction-timelines",
+              "advanced/p2pk-locking",
+              "advanced/location-stamps",
+              "advanced/pending-ecash-sweeper",
+              "advanced/swap-routing",
+              "advanced/wallet-health"
+            ]
+          },
+          {
+            "group": "Services & Integrations",
+            "pages": [
+              "integrations/routstr-ai",
+              "integrations/btcmap",
+              "integrations/deep-linking"
+            ]
+          },
+          {
+            "group": "Security & Privacy",
+            "pages": [
+              "security/overview",
+              "security/wallet-recovery",
+              "security/passcode-lock",
+              "security/key-derivation",
+              "security/privacy-features"
+            ]
+          },
+          {
+            "group": "Customization",
+            "pages": [
+              "customization/themes",
+              "customization/multi-currency",
+              "customization/settings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Developer Guide",
+        "groups": [
+          {
+            "group": "Development",
+            "pages": [
+              "development/getting-started",
+              "development/project-structure",
+              "development/tech-stack",
+              "development/scripts"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/routing",
+              "architecture/state-management",
+              "architecture/cashu-integration",
+              "architecture/nostr-integration"
+            ]
+          },
+          {
+            "group": "Protocol Support",
+            "pages": [
+              "protocols/cashu-nuts",
+              "protocols/lightning-bolts",
+              "protocols/nostr-nips",
+              "protocols/bip-standards"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/guidelines",
+              "contributing/code-quality",
+              "contributing/git-workflow"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Cashu ecash wallet with Lightning Network support",
+    "Multi-mint management with swap routing and rebalancing",
+    "Nostr-based identity, messaging, and social features",
+    "NFC tap payments and QR code scanning",
+    "Know Your Mint auditing and community ratings",
+    "P2PK locking and payment requests (NUT-18)",
+    "Transaction filtering and location stamps",
+    "Routstr AI integration with multiple models",
+    "BTCMap merchant discovery",
+    "37 customizable themes",
+    "Multi-currency display (USD, EUR, GBP)",
+    "BIP-39 seed phrase recovery",
+    "4-digit passcode protection"
+  ],
+  "publicApiSurface": [
+    "cashu:// and sovran:// URL schemes for deep linking",
+    "Cashu NUT-00 through NUT-13, NUT-17, NUT-18, NUT-23",
+    "Lightning BOLT11 invoice support",
+    "Nostr NIP-04, NIP-05, NIP-06, NIP-17, NIP-19, NIP-44, NIP-59",
+    "NFC NDEF Type 4 Tag protocol",
+    "BIP-39 mnemonic generation",
+    "BIP-32 hierarchical deterministic key derivation",
+    "NIP-06 Nostr key derivation from seed"
+  ]
+}
