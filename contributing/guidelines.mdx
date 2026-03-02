@@ -1,0 +1,209 @@
+---
+title: Contributing Guidelines
+description: How to contribute to Sovran - code standards, architecture, and workflow
+---
+
+## Before You Code
+
+Read `.cursor/rules/` docs before touching their domains. The index is `.cursor/rules/rules-index-authoring-guide.mdc`.
+
+| Domain | Read First |
+|---|---|
+| Popups, toasts, sheets | `.cursor/rules/popup-toast-sheet-guidelines.mdc` |
+| Mnemonic, keys, secure storage | `.cursor/rules/secure-storage-key-derivation.mdc` |
+| Text component, fonts, skeletons | `.cursor/rules/text-typography-skeleton-guidelines.mdc` |
+| Theme, colors, tokens | `.cursor/rules/theme-system-architecture.mdc` |
+| Zustand stores, profile scope | `.cursor/rules/zustand-store-scoping.mdc` |
+| Git, commits, PRs, issues | `.cursor/rules/git-github-workflow.mdc` |
+
+If the domain you need isn't documented, check if an existing rule doc covers it partially before creating a new one.
+
+## Execution Sequence
+
+<Steps>
+  <Step title="Search First">
+    Find existing patterns in `components/`, `hooks/`, `helper/` before creating anything new. Investigate deeply. Be 100% sure before implementing.
+  </Step>
+  
+  <Step title="Reuse First">
+    Extend existing functions, hooks, components. Make the smallest possible change.
+  </Step>
+  
+  <Step title="No Assumptions">
+    Only use: files you've read, user messages, tool results. Missing info? Search, then ask.
+  </Step>
+  
+  <Step title="Challenge Ideas">
+    If you see flaws, risks, or better approaches, say so directly. Do not auto-agree.
+  </Step>
+  
+  <Step title="Read .cursor/rules/">
+    If you're touching a documented domain (theme, popup, keys, stores, text), read the relevant rule doc BEFORE writing code.
+  </Step>
+</Steps>
+
+## Architecture Boundaries
+
+Sovran follows a strict layered architecture:
+
+<CardGroup cols={2}>
+  <Card title="app/" icon="route">
+    Routes + orchestration only. Screens stay thin.
+  </Card>
+  
+  <Card title="components/ui/" icon="cube">
+    Primitives. `components/blocks/` for composed product UI.
+  </Card>
+  
+  <Card title="hooks/coco/" icon="hook">
+    Compose coco-cashu-react hooks for UX needs. Never reimplement coco internals.
+  </Card>
+  
+  <Card title="helper/coco/" icon="code">
+    Non-React coco integration glue.
+  </Card>
+  
+  <Card title="stores/" icon="database">
+    Zustand state management. Check `.cursor/rules/zustand-store-scoping.mdc` before adding or modifying stores.
+  </Card>
+  
+  <Card title="coco-cashu-core" icon="shield-check">
+    Source of truth for Cashu types. Import from coco, not `@cashu/cashu-ts`.
+  </Card>
+</CardGroup>
+
+### Directory Structure
+
+```
+app/              # Routes + orchestration (thin screens)
+components/
+  ui/             # Primitives
+  blocks/         # Composed product UI
+hooks/            # Reusable hooks
+  coco/           # Cashu hook composition
+helper/           # Stateless utils
+  coco/           # Cashu integration glue
+stores/           # Zustand (global, profile-scoped, or runtime-only)
+.cursor/rules/    # Agent-facing rule docs (self-improving)
+```
+
+<Warning>
+  `coco-cashu-core` is the source of truth for Cashu types and logic. Never redefine coco types. Compose coco hooks, don't reimplement them. Import from coco, not `@cashu/cashu-ts`.
+</Warning>
+
+## Naming Conventions
+
+| Type | Convention | Example |
+|---|---|---|
+| Route groups | `(thing-flow)` kebab-case | `(mint-flow)`, `(send-flow)` |
+| Screens | `index.tsx`, descriptive names | `detail.tsx`, `add.tsx` |
+| Components | `PascalCase.tsx` | `WalletHeader.tsx` |
+| Hooks | `useThing.ts` | `useNostrProfile.ts` |
+| Helpers | `camelCase.ts` | `keyDerivation.ts` |
+| Handlers | `handleX` | `handleSubmit` |
+| Callbacks | `onX` | `onPress` |
+| Booleans | `isX`/`hasX`/`shouldX` | `isLoading`, `hasBalance` |
+| Constants | `SCREAMING_SNAKE` | `MAX_RETRIES` |
+
+## Import Order (Strict)
+
+Maintain this exact import order:
+
+```typescript
+// 1. React / React Native
+import React from 'react';
+import { View, Text } from 'react-native';
+
+// 2. Expo / Expo Router
+import { useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+
+// 3. Third-party (alphabetized)
+import { useQuery } from '@tanstack/react-query';
+import { create } from 'zustand';
+
+// 4. Internal absolute (coco-cashu-core → coco-cashu-react → @/helper/coco → @/hooks/coco → rest)
+import { Proof } from 'coco-cashu-core';
+import { useMint } from 'coco-cashu-react';
+import { deriveKeys } from '@/helper/coco/keyDerivation';
+import { useProcessPayment } from '@/hooks/coco/useProcessPayment';
+import { useSettingsStore } from '@/stores/settingsStore';
+
+// 5. Relative (./ then ../, alphabetized)
+import { Button } from './Button';
+import { Header } from '../Header';
+```
+
+<Tip>
+  Remove unused imports. This is checked by the linter.
+</Tip>
+
+## Security — Absolute Rules
+
+<Warning>
+  These are non-negotiable security requirements:
+</Warning>
+
+- **Never** store secrets in Zustand. Use `expo-secure-store`.
+- **Never** change key derivation outputs, parameters, or serialization without reading `.cursor/rules/secure-storage-key-derivation.mdc`.
+- **Never** commit mnemonics, nsec, private keys, API tokens, `.env` contents.
+
+### Never Commit
+
+Scan diffs before staging. **Refuse to commit** if found:
+
+- Passwords, API keys, tokens, session cookies
+- Mnemonics (12–24 words), `xprv`, WIF, raw private keys
+- Nostr secrets (`nsec1...`), hex private keys
+- `.env` contents, credential files
+
+## Rule Documentation Improvement Protocol
+
+When you encounter any of these situations, update `.cursor/rules/` **in the same PR**:
+
+<Steps>
+  <Step title="Gap">
+    You needed info that wasn't documented → add it to the relevant doc, or create a new one following `.cursor/rules/rules-index-authoring-guide.mdc`.
+  </Step>
+  
+  <Step title="Stale">
+    A doc contradicts what the code actually does → fix the doc to match reality.
+  </Step>
+  
+  <Step title="Missing Pattern">
+    You discovered a convention by reading code that future agents would benefit from → append it to the appropriate doc.
+  </Step>
+  
+  <Step title="Post-mortem">
+    A bug was caused by violating an undocumented rule → document the rule so it isn't repeated.
+  </Step>
+</Steps>
+
+Format for new rule docs: see the authoring template in `.cursor/rules/rules-index-authoring-guide.mdc`.
+
+## Self-Check Before Submitting
+
+Before submitting a PR, verify:
+
+- ✅ Does the diff only contain changes required by the task?
+- ✅ Are loading states layout-shift free?
+- ✅ Are coco types imported from coco, not redefined?
+- ✅ Are new stores registered in profile-switch and reset contracts (if profile-scoped)?
+- ✅ Would a future agent understand why this code exists?
+- ✅ All quality checks pass? (See [Code Quality](/contributing/code-quality))
+
+## Support
+
+<CardGroup cols={3}>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/SovranBitcoin/Sovran/issues">
+    Bug reports and feature requests
+  </Card>
+  
+  <Card title="Nostr" icon="message">
+    Direct messaging via Nostr protocol
+  </Card>
+  
+  <Card title="Twitter" icon="twitter" href="https://x.com/KevinKelbie">
+    @KevinKelbie
+  </Card>
+</CardGroup>

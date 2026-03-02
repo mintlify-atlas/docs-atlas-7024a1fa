@@ -1,0 +1,482 @@
+---
+title: NFC Tap Payments
+description: Contactless ecash payments using NFC for point-of-sale terminals and peer-to-peer transfers
+---
+
+## Overview
+
+Sovran supports NFC (Near Field Communication) payments for contactless ecash transfers. Users can tap their device to a point-of-sale terminal or another device to send/receive Cashu tokens instantly.
+
+## NFC Architecture
+
+The NFC implementation is modular and located in `helper/nfc/`:
+
+```
+helper/nfc/
+├── index.ts           # Public API exports
+├── payment.ts         # POS payment flow
+├── write-token.ts     # P2P token writing
+├── errors.ts          # Typed error handling
+├── apdu.ts           # ISO 7816 APDU commands
+├── ndef.ts           # NDEF message encoding/decoding
+├── mint-selection.ts  # Mint selection logic
+├── status.ts         # NFC availability checks
+├── constants.ts      # Protocol constants
+├── messages.ts       # User-facing error messages
+└── logger.ts         # Debug logging
+```
+
+## Payment Hook
+
+The `useNfcEcashPayment` hook provides a declarative interface for NFC payments:
+
+```typescript
+export type NfcPaymentStatus = 'idle' | 'paying' | 'error';
+
+export function useNfcEcashPayment({
+  send,
+  manager,
+  availableMints,
+  preferredMint,
+  getSelectedMint,
+  pubkey,
+  usdToSats,
+}: UseNfcEcashPaymentArgs) {
+  const [status, setStatus] = useState<NfcPaymentStatus>('idle');
+  const [error, setError] = useState<NfcErrorMessage | null>(null);
+
+  return useMemo(
+    () => ({
+      status,
+      error,
+      resetError,
+      startPayment,
+      handleNfcPaymentAlert,
+      isIdle: status === 'idle',
+      isPaying: status === 'paying',
+      isError: status === 'error',
+    }),
+    [status, error, resetError, startPayment, handleNfcPaymentAlert]
+  );
+}
+```
+
+From `hooks/useNfcEcashPayment.tsx:29-219`.
+
+## Payment Flow
+
+The NFC payment flow consists of four phases:
+
+### Phase 1: Read Payment Request
+
+1. Acquire IsoDep technology
+2. Select AID (Application Identifier)
+3. Select NDEF file
+4. Read NLEN (NDEF length)
+5. Read NDEF content (chunked if > 250 bytes)
+6. Decode payment request
+
+```typescript
+log('Phase 1: Reading payment request...');
+
+let r = await sendApdu(SELECT_AID, 'SELECT AID');
+if (!r.ok) {
+  throw new NfcError(
+    `AID not accepted by tag (${getStatusMessage(r.sw)})`,
+    'AID_SELECT_FAILED',
+    r.sw
+  );
+}
+
+r = await sendApdu(SELECT_NDEF, 'SELECT NDEF');
+if (!r.ok) {
+  throw new NfcError(
+    `NDEF file not accessible (${getStatusMessage(r.sw)})`,
+    'NDEF_SELECT_FAILED',
+    r.sw
+  );
+}
+
+r = await sendApdu(readBinary(0, 2), 'READ NLEN');
+const nlen = (r.payload[0] << 8) | r.payload[1];
+
+// Read NDEF content (chunked if necessary)
+let ndefBytes: number[] = [];
+if (nlen <= MAX_CHUNK_SIZE) {
+  r = await sendApdu(readBinary(2, nlen), 'READ NDEF');
+  ndefBytes = r.payload;
+} else {
+  // Chunked reading for large NDEF messages
+  let offset = 2;
+  let remaining = nlen;
+  while (remaining > 0) {
+    const chunkSize = Math.min(remaining, MAX_CHUNK_SIZE);
+    r = await sendApdu(readBinary(offset, chunkSize), `READ chunk @${offset}`);
+    ndefBytes.push(...r.payload);
+    offset += chunkSize;
+    remaining -= chunkSize;
+  }
+}
+
+paymentRequest = decodeTextRecord(ndefBytes);
+```
+
+From `helper/nfc/payment.ts:114-183`.
+
+### Phase 2: Decode and Validate
+
+1. Decode NUT-18 payment request
+2. Extract amount, unit, allowed mints
+3. Validate amount against limit
+4. Wait for mint availability
+5. Select best mint
+
+```typescript
+log('Phase 2: Decoding payment request...');
+const { decodePaymentRequest } = await import('@cashu/cashu-ts');
+const decoded = decodePaymentRequest(paymentRequest);
+
+amount = decoded.amount ?? 0;
+const unit = decoded.unit ?? 'sat';
+const allowedMints = decoded.mints ?? [];
+
+log(`Payment request: ${amount} ${unit}`);
+
+if (amount <= 0) {
+  throw new NfcError('Invalid payment amount', 'INVALID_AMOUNT');
+}
+
+if (maxAmountSats !== undefined && amount > maxAmountSats) {
+  throw new NfcError(
+    `Amount ${amount} sats exceeds your limit of ${maxAmountSats} sats`,
+    'AMOUNT_EXCEEDED'
+  );
+}
+
+const liveAvailableMints = await waitForAvailableMints(resolveAvailableMints);
+if (Object.keys(liveAvailableMints).length === 0) {
+  throw new NfcError(
+    'No mints available. Please add a mint to your wallet first.',
+    'NO_AVAILABLE_MINTS'
+  );
+}
+
+const mintSelection = selectBestMint(allowedMints, liveAvailableMints, amount, preferredMint);
+selectedMint = mintSelection.mintUrl;
+```
+
+From `helper/nfc/payment.ts:214-247`.
+
+### Phase 3: Create Token
+
+1. Call `createToken` callback
+2. Generate ecash token for amount
+3. Encode as V4 token
+
+```typescript
+log('Phase 3: Creating token...');
+try {
+  createdToken = await createToken(selectedMint, amount);
+} catch (error) {
+  logError('Token creation failed:', error);
+  throw new NfcError(
+    `Failed to create token: ${error instanceof Error ? error.message : String(error)}`,
+    'TOKEN_CREATION_FAILED'
+  );
+}
+
+if (!createdToken || createdToken.length === 0) {
+  throw new NfcError('Token creation returned empty token', 'INVALID_TOKEN');
+}
+
+log(`Token created (${createdToken.length} chars)`);
+```
+
+From `helper/nfc/payment.ts:249-265`.
+
+### Phase 4: Write Token Back
+
+1. Re-select NDEF file
+2. Write NLEN
+3. Write NDEF content (chunked if > 250 bytes)
+4. Release NFC technology
+
+```typescript
+log('Phase 4: Writing token back to POS...');
+
+r = await sendApdu(SELECT_NDEF, 'SELECT NDEF (write)');
+if (!r.ok) {
+  throw new NfcError(
+    `NDEF file not accessible for write (${getStatusMessage(r.sw)})`,
+    'NDEF_SELECT_FAILED',
+    r.sw
+  );
+}
+
+const ndef = buildTextNdef(createdToken);
+r = await sendApdu(updateBinary(0, [ndef[0], ndef[1]]), 'WRITE NLEN');
+if (!r.ok) {
+  throw new NfcError(
+    `Failed writing NLEN (${getStatusMessage(r.sw)})`,
+    'WRITE_NLEN_FAILED',
+    r.sw
+  );
+}
+
+let offset = 2;
+const body = ndef.slice(2);
+const totalChunks = Math.ceil(body.length / MAX_CHUNK_SIZE);
+for (let chunkNum = 0; offset - 2 < body.length; chunkNum++) {
+  const chunk = body.slice(offset - 2, offset - 2 + MAX_CHUNK_SIZE);
+  logDebug(`Writing chunk ${chunkNum + 1}/${totalChunks}: ${chunk.length} bytes`);
+  r = await sendApdu(updateBinary(offset, chunk), `WRITE chunk ${chunkNum + 1}`);
+  if (!r.ok) {
+    throw new NfcError(
+      `Failed writing chunk (${getStatusMessage(r.sw)})`,
+      'WRITE_CHUNK_FAILED',
+      r.sw
+    );
+  }
+  offset += chunk.length;
+}
+
+log('NFC payment completed successfully!');
+await releaseNfc();
+```
+
+From `helper/nfc/payment.ts:267-307`.
+
+## Token Recovery
+
+If the write fails after token creation, the token is automatically recovered:
+
+```typescript
+try {
+  const result = await NfcPayment.performPayment({
+    createToken: async (mintUrl, amount) => {
+      const { token, historyEntry } = await send(mintUrl, amount);
+      lastOperationId = historyEntry.operationId;
+      return getEncodedTokenV4(token);
+    },
+    recoverToken: rollbackPendingSend,
+    // ...
+  });
+} catch (err) {
+  const code = isNfcError ? err.code : 'PAYMENT_FAILED';
+  
+  if (code === 'TAG_LOST' || code === 'TRANSCEIVE_FAILED' || !isNfcError) {
+    await rollbackPendingSend();
+  }
+}
+```
+
+From `hooks/useNfcEcashPayment.tsx:123-176`.
+
+## Lightning Invoice Detection
+
+NFC can detect Lightning invoices and redirect to Lightning flow:
+
+```typescript
+const trimmedForLightning = lnTrim(paymentRequest);
+if (isLightningInvoice(trimmedForLightning)) {
+  log('Lightning invoice detected via NFC');
+  const lnAmount = getLightningAmount(trimmedForLightning);
+  if (onLightningInvoice) {
+    await releaseNfc();
+    onLightningInvoice(trimmedForLightning, lnAmount);
+    return { paymentRequest, mintUrl: '', amount: lnAmount };
+  }
+  throw new NfcError(
+    'Lightning invoice detected. Please use the Lightning payment flow.',
+    'LIGHTNING_INVOICE_DETECTED'
+  );
+}
+```
+
+From `helper/nfc/payment.ts:198-212`.
+
+## Mint Selection
+
+The `selectBestMint` function chooses the optimal mint:
+
+```typescript
+export function selectBestMint(
+  allowedMints: string[],
+  availableMints: Record<string, number>,
+  amount: number,
+  preferredMint?: string
+): { mintUrl: string; balance: number } {
+  // Priority 1: Preferred mint (if allowed and has balance)
+  if (preferredMint && availableMints[preferredMint] >= amount) {
+    if (allowedMints.length === 0 || allowedMints.includes(preferredMint)) {
+      return { mintUrl: preferredMint, balance: availableMints[preferredMint] };
+    }
+  }
+
+  // Priority 2: Allowed mints with sufficient balance
+  const validMints = allowedMints.length > 0
+    ? allowedMints.filter((mint) => availableMints[mint] >= amount)
+    : Object.entries(availableMints)
+        .filter(([_, balance]) => balance >= amount)
+        .map(([mint]) => mint);
+
+  if (validMints.length === 0) {
+    throw new Error('No mints with sufficient balance');
+  }
+
+  // Select mint with highest balance
+  const bestMint = validMints.reduce((best, current) => {
+    return availableMints[current] > availableMints[best] ? current : best;
+  });
+
+  return { mintUrl: bestMint, balance: availableMints[bestMint] };
+}
+```
+
+From `helper/nfc/mint-selection.ts`.
+
+## Payment Limit Tiers
+
+Users select a payment limit before tapping:
+
+```typescript
+const handleNfcPaymentAlert = useCallback(() => {
+  Alert.alert('NFC Payment Limit', 'Select your payment limit', [
+    ...PAYMENT_TIERS.map((tier) => ({
+      text: tier.label,
+      onPress: () => startPayment(tier.usdLimit),
+    })),
+    { text: 'Cancel', style: 'cancel' },
+  ]);
+}, [startPayment]);
+```
+
+From `hooks/useNfcEcashPayment.tsx:197-205`.
+
+## P2P Token Writing
+
+Write tokens to NFC tags for peer-to-peer sharing:
+
+```typescript
+export async function writeTokenToNFC(token: string): Promise<NfcTokenWriteResult> {
+  log('Starting NFC token write...');
+
+  if (!(await isNfcSupported())) {
+    return {
+      success: false,
+      errorCode: 'NOT_SUPPORTED',
+      errorMessage: 'NFC is not supported on this device',
+    };
+  }
+  if (!(await isNfcEnabled())) {
+    return { success: false, errorCode: 'NOT_ENABLED', errorMessage: 'NFC is disabled' };
+  }
+
+  try {
+    await NfcManager.requestTechnology(NfcTech.IsoDep);
+    
+    let r = await sendApdu(SELECT_AID, 'SELECT AID');
+    r = await sendApdu(SELECT_NDEF, 'SELECT NDEF');
+    
+    const ndef = buildTextNdef(token);
+    r = await sendApdu(updateBinary(0, [ndef[0], ndef[1]]), 'WRITE NLEN');
+    
+    // Write NDEF body in chunks
+    let offset = 2;
+    const body = ndef.slice(2);
+    for (let chunkNum = 0; offset - 2 < body.length; chunkNum++) {
+      const chunk = body.slice(offset - 2, offset - 2 + MAX_CHUNK_SIZE);
+      r = await sendApdu(updateBinary(offset, chunk), `WRITE chunk ${chunkNum + 1}`);
+      offset += chunk.length;
+    }
+
+    log('Token written to NFC successfully!');
+    return { success: true };
+  } catch (error) {
+    // Error handling
+  } finally {
+    await NfcManager.cancelTechnologyRequest();
+  }
+}
+```
+
+From `helper/nfc/write-token.ts:20-97`.
+
+## Error Handling
+
+Typed errors with user-friendly messages:
+
+```typescript
+export class NfcError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusWord?: number
+  ) {
+    super(message);
+    this.name = 'NfcError';
+  }
+}
+```
+
+Error codes include:
+- `NOT_SUPPORTED` - NFC not available on device
+- `NOT_ENABLED` - NFC disabled in settings
+- `TAG_LOST` - Connection lost during operation
+- `AMOUNT_EXCEEDED` - Payment exceeds limit
+- `NO_AVAILABLE_MINTS` - No mints with balance
+- `INVALID_AMOUNT` - Invalid payment amount
+- `TOKEN_CREATION_FAILED` - Failed to create token
+- `WRITE_CHUNK_FAILED` - Failed to write token
+
+## Header Integration
+
+NFC payment button in wallet header:
+
+```typescript
+const nfc = useNfcEcashPayment({
+  send,
+  manager: manager ?? undefined,
+  availableMints,
+  preferredMint: selectedMint,
+  getSelectedMint,
+  pubkey: keys?.pubkey,
+  usdToSats,
+});
+
+// Header right button
+<Stack.Screen
+  options={{
+    headerRightIcon: 'wave.3.right',
+    onHeaderRightPress: nfc.handleNfcPaymentAlert,
+  }}
+/>
+```
+
+From `app/(drawer)/(tabs)/index/_layout.tsx:70-97`.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Contactless Payments" icon="nfc-symbol">
+    Tap-to-pay at NFC-enabled point-of-sale terminals
+  </Card>
+  
+  <Card title="Automatic Recovery" icon="shield-check">
+    Token rollback if write fails after creation
+  </Card>
+  
+  <Card title="Lightning Detection" icon="bolt">
+    Automatic detection and routing for Lightning invoices
+  </Card>
+  
+  <Card title="Smart Mint Selection" icon="brain">
+    Intelligent mint selection based on balance and restrictions
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Lightning Payments](/features/lightning-payments) - Lightning Network integration
+- [Ecash Tokens](/features/ecash-tokens) - Token operations
+- [QR Scanner](/features/qr-scanner) - QR code scanning

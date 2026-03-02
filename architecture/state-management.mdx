@@ -1,0 +1,415 @@
+---
+title: 'State Management'
+description: 'Zustand stores, Redux migration, and profile-scoped state'
+icon: 'database'
+---
+
+## State Management Overview
+
+Sovran is transitioning from **Redux** to **Zustand** for state management. The migration is ongoing, with new features using Zustand while legacy code still uses Redux.
+
+### Why Zustand?
+
+- **Simpler API**: Less boilerplate than Redux (no actions, reducers, or dispatch)
+- **Better TypeScript**: Full type inference without manual typing
+- **Smaller bundle**: ~1KB vs Redux's ~10KB
+- **React-first**: Hooks-based API that feels native to React
+- **Profile-scoped stores**: Easy to create per-profile state isolation
+
+## Zustand Stores
+
+All Zustand stores live in `stores/` and follow a consistent pattern.
+
+### Store Architecture
+
+stores/settingsStore.ts:144-267
+
+**Store pattern:**
+
+```tsx
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+interface StoreState {
+  // State properties
+  value: string;
+}
+
+interface StoreActions {
+  // Actions
+  setValue: (value: string) => void;
+  getValue: () => string;
+}
+
+type Store = StoreState & StoreActions;
+
+export const useStore = create<Store>()(
+  persist(
+    (set, get) => ({
+      // Initial state
+      value: '',
+      
+      // Actions
+      setValue: (value) => set({ value }),
+      getValue: () => get().value,
+    }),
+    {
+      name: 'store-name',
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => ({ value: state.value })
+    }
+  )
+);
+```
+
+### Global Stores
+
+These stores persist globally across all profiles:
+
+<CodeGroup>
+```tsx settingsStore.ts
+// Stores app-wide settings
+export const useSettingsStore = create<SettingsStore>()(persist(...));
+
+// Usage
+const theme = useSettingsStore(s => s.theme);
+const setTheme = useSettingsStore(s => s.setTheme);
+```
+
+```tsx pricelistStore.ts
+// Caches BTC prices (USD/EUR/GBP)
+export const usePricelistStore = create<PricelistStore>()(persist(...));
+
+// Usage
+const btcPrice = useBtcPrice('usd');
+const isStale = usePricelistStore(s => s.isStale());
+```
+
+```tsx profileStore.ts
+// Manages user profiles and active profile
+export const useProfileStore = create<ProfileStore>()(persist(...));
+
+// Usage
+const activeAccountIndex = useProfileStore(s => s.activeAccountIndex);
+const profiles = useProfileStore(s => s.profiles);
+```
+</CodeGroup>
+
+### Profile-Scoped Stores
+
+These stores are isolated per profile (wallet). Each profile has its own AsyncStorage key:
+
+- **Account 0**: `mint-store-profile-0`
+- **Account 1**: `mint-store-profile-1`
+- **Account N**: `mint-store-profile-N`
+
+**Profile-scoped stores:**
+
+| Store | Purpose | Key Pattern |
+|-------|---------|-------------|
+| `mintStore` | Mint URLs, icons, metadata | `mint-store-profile-{N}` |
+| `mintDistributionStore` | Target distribution per mint (basis points) | `mint-distribution-store-profile-{N}` |
+| `swapTransactionsStore` | Grouped swap/rebalance transactions | `swap-transactions-store-profile-{N}` |
+| `scanHistoryStore` | QR/NFC/paste scan history | `scan-history-store-profile-{N}` |
+| `transactionLocationStore` | GPS stamps for transactions | `transaction-location-store-profile-{N}` |
+| `routstrStore` | Routstr AI chat (API key, conversations) | `routstr-store-profile-{N}` |
+| `searchHistoryStore` | Nostr profile search history | `search-history-store-profile-{N}` |
+
+**Rehydration on profile switch:**
+
+When switching profiles, all profile-scoped stores are rehydrated from the new profile's AsyncStorage keys:
+
+```tsx
+// helper/profileScopedStorage.ts
+export async function rehydrateProfileStores(): Promise<void> {
+  const accountIndex = useProfileStore.getState().activeAccountIndex;
+  
+  // Each store has a rehydrate method that reads from profile-specific key
+  await Promise.all([
+    useMintStore.persist.rehydrate(),
+    useMintDistributionStore.persist.rehydrate(),
+    useSwapTransactionsStore.persist.rehydrate(),
+    // ... etc
+  ]);
+}
+```
+
+This is called in the drawer layout profile switch handler:
+
+app/(drawer)/_layout.tsx:105-108
+
+### Runtime-Only Stores
+
+Some stores don't persist to AsyncStorage (in-memory only):
+
+```tsx
+// stores/popupStore.ts - UI state for popups/toasts
+export const usePopupStore = create<PopupStore>()((set, get) => ({
+  popups: [],
+  addPopup: (popup) => set((s) => ({ popups: [...s.popups, popup] })),
+  removePopup: (id) => set((s) => ({ popups: s.popups.filter(p => p.id !== id) }))
+}));
+```
+
+No `persist()` middleware means state resets on app restart.
+
+## Redux (Legacy)
+
+Redux is being phased out but still handles:
+
+- Cashu proof state (migrating to Coco SQLite)
+- Nostr contact state (migrating to Zustand)
+- Settings (already migrated to `settingsStore`)
+
+redux/store/index.ts:1-728
+
+### Redux Structure
+
+```
+redux/
+├── store/
+│   ├── index.ts          # Store creation, migrations, persist config
+│   └── reducer.ts        # Root reducer combining all slices
+├── cashu/
+│   ├── reducer.ts        # Cashu state (proofs, transactions)
+│   └── types.ts          # Type definitions
+├── nostr/
+│   ├── reducer.ts        # Nostr contacts, profiles
+│   └── index.ts          # Action creators
+└── settings/
+    ├── reducer.ts        # App settings (DEPRECATED - use settingsStore)
+    └── actionTypes.ts    # Action constants
+```
+
+### Migrations
+
+Redux uses `redux-persist` migrations to evolve the store schema:
+
+redux/store/index.ts:17-587
+
+Migration 151 moves the mnemonic from Redux to expo-secure-store:
+
+redux/store/index.ts:506-559
+
+Migration 152 migrates settings from Redux to Zustand:
+
+redux/store/index.ts:560-586
+
+### Accessing Redux State
+
+```tsx
+import { useSelector } from 'react-redux';
+import type { RootState } from 'redux/store/reducer';
+
+// In a component
+function MyComponent() {
+  const proofs = useSelector((state: RootState) => 
+    state.cashu.profiles[0]?.proofs ?? {}
+  );
+  
+  return <Text>Proofs: {Object.keys(proofs).length}</Text>;
+}
+```
+
+<Warning>
+Avoid adding new features to Redux. Use Zustand instead. Only modify Redux for bug fixes or migrations.
+</Warning>
+
+## State Migration Strategy
+
+The migration from Redux to Zustand follows this approach:
+
+### Phase 1: Settings ✅ Complete
+
+- Migrated `settingsStore` to Zustand
+- Migration runs automatically on app startup (see migration 152)
+- Old Redux settings slice is now ignored
+
+### Phase 2: Cashu State 🚧 In Progress
+
+- Moving from Redux to **Coco SQLite** (not Zustand)
+- Proofs, quotes, and transactions now live in `coco.db`
+- Redux cashu slice will be removed once migration is complete
+- Uses `coco-cashu-expo-sqlite` repository layer
+
+### Phase 3: Nostr State 📋 Planned
+
+- Migrate contacts/profiles to Zustand stores
+- Use NDK's SQLite cache for event data
+- Keep Redux only for backward compatibility during migration
+
+### Phase 4: Complete Removal 🎯 Future
+
+- Remove Redux entirely
+- Delete `redux/` directory
+- Remove `redux`, `react-redux`, `redux-persist`, `redux-thunk` dependencies
+- Estimated bundle size reduction: ~15KB
+
+## Store Clearing on Reset
+
+When the user deletes all data (Settings → Delete Everything), all stores are cleared:
+
+redux/store/index.ts:608-727
+
+This clears:
+
+1. Coco SQLite database (`coco.db` and all `coco-N.db` files)
+2. All profile-scoped Zustand stores (current profile)
+3. All global Zustand stores
+4. All profile-scoped AsyncStorage keys (all profiles)
+5. Redux persisted state
+6. Secure storage (mnemonics, keys)
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use selectors for derived state">
+    Don't compute values in components - derive them in the store:
+    
+    ```tsx
+    // Good ✅
+    export const usePricelistStore = create<PricelistStore>()(
+      persist(
+        (set, get) => ({
+          pricelist: null,
+          getBtcPrice: (currency = 'usd') => {
+            const { pricelist } = get();
+            return pricelist?.[currency]?.btc ?? null;
+          }
+        }),
+        { name: 'pricelist-store', storage: createJSONStorage(() => AsyncStorage) }
+      )
+    );
+    
+    // Usage
+    const btcPrice = usePricelistStore(s => s.getBtcPrice('usd'));
+    
+    // Bad ❌
+    const pricelist = usePricelistStore(s => s.pricelist);
+    const btcPrice = pricelist?.usd?.btc ?? null; // Computation in component
+    ```
+  </Accordion>
+  
+  <Accordion title="Minimize re-renders with selectors">
+    Only subscribe to the specific state you need:
+    
+    ```tsx
+    // Good ✅ - Only re-renders when theme changes
+    const theme = useSettingsStore(s => s.theme);
+    
+    // Bad ❌ - Re-renders on ANY settings change
+    const settings = useSettingsStore();
+    const theme = settings.theme;
+    ```
+  </Accordion>
+  
+  <Accordion title="Use partialize to control persistence">
+    Don't persist everything - only what's needed:
+    
+    ```tsx
+    export const useStore = create<Store>()(persist(
+      (set, get) => ({
+        value: '',
+        tempData: null, // Don't persist this
+        setValue: (value) => set({ value }),
+      }),
+      {
+        name: 'store-name',
+        storage: createJSONStorage(() => AsyncStorage),
+        partialize: (state) => ({ value: state.value }) // Only persist 'value'
+      }
+    ));
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle rehydration errors">
+    Always provide error handling for persistence:
+    
+    ```tsx
+    export const useStore = create<Store>()(persist(
+      (set, get) => ({ /* ... */ }),
+      {
+        name: 'store-name',
+        storage: createJSONStorage(() => AsyncStorage),
+        onRehydrateStorage: () => (state, error) => {
+          if (error) {
+            console.warn('Failed to rehydrate store:', error);
+            // Reset to defaults or handle gracefully
+          }
+        }
+      }
+    ));
+    ```
+  </Accordion>
+  
+  <Accordion title="Use profile-scoped stores for user data">
+    Any data specific to a wallet/profile should use profile-scoped storage:
+    
+    ```tsx
+    // helper/profileScopedStorage.ts
+    export function createProfileScopedStore<T>(
+      storeName: string,
+      initialState: T
+    ) {
+      return create<T>()(persist(
+        (set, get) => ({ ...initialState }),
+        {
+          name: `${storeName}-profile-${useProfileStore.getState().activeAccountIndex}`,
+          storage: createJSONStorage(() => AsyncStorage)
+        }
+      ));
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Considerations
+
+### Subscription Patterns
+
+```tsx
+// Fast - subscribes to single value
+const theme = useSettingsStore(s => s.theme);
+
+// Medium - subscribes to object (shallow equality)
+const settings = useSettingsStore(s => ({ 
+  theme: s.theme, 
+  language: s.language 
+}));
+
+// Slow - subscribes to entire store
+const allSettings = useSettingsStore();
+```
+
+### Outside React Components
+
+Access store state outside React:
+
+```tsx
+// Get current value (not reactive)
+const theme = useSettingsStore.getState().theme;
+
+// Call actions
+useSettingsStore.getState().setTheme('dark');
+
+// Subscribe to changes
+const unsubscribe = useSettingsStore.subscribe(
+  (state) => console.log('Theme changed:', state.theme)
+);
+
+// Clean up
+unsubscribe();
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" href="/architecture/overview" icon="sitemap">
+    See how stores fit into the overall architecture
+  </Card>
+  
+  <Card title="Cashu Integration" href="/architecture/cashu-integration" icon="coins">
+    Learn about Coco SQLite storage for proofs and quotes
+  </Card>
+</CardGroup>

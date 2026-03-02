@@ -1,0 +1,317 @@
+---
+title: Themes
+description: Customize your Sovran wallet with 37 beautiful themes including color palettes and background wallpapers
+icon: palette
+---
+
+Sovran offers 37 unique themes to personalize your wallet experience. Choose from carefully crafted color palettes or immersive background wallpapers.
+
+## Theme Categories
+
+Themes are organized into two categories:
+
+<CardGroup cols={2}>
+  <Card title="Color Themes" icon="swatchbook">
+    Gradient color palettes with carefully selected shades (31 themes)
+  </Card>
+  <Card title="Wallpaper Themes" icon="image">
+    Beautiful background images with matching color extraction (6 themes)
+  </Card>
+</CardGroup>
+
+## Accessing Themes
+
+Navigate to **Settings → Theme** to browse and select your preferred theme.
+
+<Frame>
+  <img src="/images/theme-selector.png" alt="Theme selector interface" />
+</Frame>
+
+## Color Themes
+
+Color themes use gradient palettes with shades ranging from 950 (darkest) to 0 (lightest). Each theme includes 12 color stops for smooth UI rendering.
+
+### Available Color Themes
+
+<AccordionGroup>
+  <Accordion title="Dark & Neutral (7 themes)">
+    - **Dark** — Classic dark mode with subtle grays
+    - **Dark Grey** — Deep charcoal to soft gray gradient
+    - **Slate Shadow** — Cool slate tones
+    - **Mystic Fog** — Mysterious foggy grays
+    - **Eclipse Steel** — Industrial steel finish
+    - **Urban Concrete** — Modern concrete aesthetic
+    - **Misty Morning** — Soft morning mist palette
+  </Accordion>
+
+  <Accordion title="Warm & Earth Tones (7 themes)">
+    - **Beige** — Warm sandy beige gradient
+    - **Middle Beige** — Balanced earth tones
+    - **Light Beige** — Soft cream to tan
+    - **Desert Dune** — Warm desert sand
+    - **Twilight Amber** — Deep amber glow
+    - **Autumn** — Rich autumn leaves
+    - **Coral Sunrise** — Warm coral and peach
+  </Accordion>
+
+  <Accordion title="Cool & Ocean (5 themes)">
+    - **Ice Queen** — Cool ice blue tones
+    - **Ocean** — Deep ocean cyan
+    - **Navy** — Classic navy blue
+    - **Celestial Aura** — Ethereal sky blue
+    - **Digital Oasis** — Vibrant teal
+  </Accordion>
+
+  <Accordion title="Nature & Forest (2 themes)">
+    - **Tropical Forest** — Lush green forest
+    - **Forest** — Deep woodland green
+    - **Velvet Emerald** — Rich emerald tones
+  </Accordion>
+
+  <Accordion title="Bold & Vibrant (10 themes)">
+    - **Sunset** — Pink and rose sunset
+    - **Rose** — Romantic rose pink
+    - **Crimson Night** — Deep crimson red
+    - **Volcanic Crimson** — Intense lava red
+    - **Neon Dream** — Electric purple neon
+    - **Cosmic Ember** — Magenta and purple
+    - **Retro Outrun** — 80s synthwave vibes
+    - **Aurora Twilight** — Purple aurora gradient
+    - **Light** — Inverted light mode palette
+  </Accordion>
+</AccordionGroup>
+
+### Theme Structure
+
+Each color theme is defined in `themes.ts` with a complete shade palette:
+
+```typescript themes.ts
+export const THEMES = {
+  'dark': {
+    0: '#FFFFFF',    // Lightest
+    50: '#E8EAED',
+    100: '#C7C7C7',
+    200: '#A8A8A8',
+    300: '#787878',
+    400: '#525252',
+    500: '#2C2C2C',
+    600: '#202020',
+    700: '#1C1C1C',
+    800: '#181818',
+    900: '#121212',
+    950: '#080808',   // Darkest
+  },
+  // ... 30+ more themes
+};
+```
+
+## Wallpaper Themes
+
+Wallpaper themes feature stunning background images with automatically extracted dominant colors for UI elements.
+
+### Available Wallpapers
+
+<CardGroup cols={2}>
+  <Card title="Cosmic Purple" icon="galaxy">
+    Deep space purple with vibrant accents
+  </Card>
+  <Card title="Deep Ocean" icon="water">
+    Underwater teal and turquoise depths
+  </Card>
+  <Card title="Mountain Peaks" icon="mountain">
+    Majestic mountain silhouettes
+  </Card>
+  <Card title="Mountain Sky" icon="cloud-sun">
+    Serene mountain skyline at dusk
+  </Card>
+  <Card title="Mystic Blue" icon="wand-sparkles">
+    Mystical blue and magenta blend
+  </Card>
+  <Card title="Royal Purple" icon="crown">
+    Regal purple gradient elegance
+  </Card>
+</CardGroup>
+
+### Wallpaper Configuration
+
+Wallpaper themes are configured in `config/backgroundImageThemes.ts`:
+
+```typescript config/backgroundImageThemes.ts
+export const backgroundImageThemes: Record<string, ImageSource> = {
+  cosmicpurple: require('assets/images/backgrounds/cosmic-purple.png'),
+  deepocean: require('assets/images/backgrounds/deep-ocean.png'),
+  mountainpeaks: require('assets/images/backgrounds/mountain-peaks.png'),
+  mountainsky: require('assets/images/backgrounds/mountain-sky.png'),
+  mysticblue: require('assets/images/backgrounds/mystic-blue.png'),
+  royalpurple: require('assets/images/backgrounds/royal-purple.png'),
+};
+```
+
+### Dominant Color Extraction
+
+Each wallpaper includes extracted dominant colors for UI consistency:
+
+```typescript
+export const backgroundThemeDominantColors: Record<string, DominantColor[]> = {
+  cosmicpurple: [
+    { hex: '#68194A', hue: 323, saturation: 61, lightness: 25 },
+    { hex: '#322B84', hue: 245, saturation: 51, lightness: 34 },
+    { hex: '#14BA73', hue: 154, saturation: 81, lightness: 40 },
+    // ... 5 colors per theme
+  ],
+};
+```
+
+### Gradient Colors
+
+Wallpapers also include gradient color scales (light → mid → dark):
+
+```typescript
+export const backgroundThemeGradientColors: Record<string, GradientColor[]> = {
+  cosmicpurple: [
+    { hex: '#3D95B3', position: 'light', hsb: { hue: 195, saturation: 66, brightness: 70 } },
+    { hex: '#2F277E', position: 'mid', hsb: { hue: 246, saturation: 69, brightness: 49 } },
+    { hex: '#13092F', position: 'dark', hsb: { hue: 256, saturation: 81, brightness: 18 } },
+  ],
+};
+```
+
+## Theme Provider
+
+Themes are managed globally through the `ThemeProvider` component.
+
+### Using the Theme Provider
+
+```tsx providers/ThemeProvider.tsx
+import { useTheme } from 'providers/ThemeProvider';
+
+function MyComponent() {
+  const { currentTheme, setTheme, availableThemes } = useTheme();
+
+  return (
+    <View>
+      <Text>Current: {currentTheme}</Text>
+      <Button onPress={() => setTheme('ocean')}>Switch to Ocean</Button>
+    </View>
+  );
+}
+```
+
+### Theme Context API
+
+```typescript
+interface ThemeContextValue {
+  currentTheme: string;           // Currently active theme name
+  setTheme: (themeName: string) => void;  // Switch theme
+  availableThemes: ThemeName[];   // Array of all theme names
+}
+```
+
+## Implementation Details
+
+### Theme Selection UI
+
+The theme selector (`app/settings-pages/theme.tsx`) displays themes in a grid with visual previews:
+
+```tsx app/settings-pages/theme.tsx
+function ThemeCard({ themeName, isSelected, onPress, isBackgroundTheme }) {
+  const themeColors = THEMES[themeName];
+  const gradientColors = isBackgroundTheme
+    ? backgroundThemeGradientColors[themeName]?.map(c => c.hex)
+    : null;
+
+  return (
+    <PressableFeedback onPress={onPress}>
+      {/* Background: image or gradient */}
+      {isBackgroundTheme && backgroundImageThemes[themeName] ? (
+        <Image source={backgroundImageThemes[themeName]} />
+      ) : (
+        <LinearGradient colors={gradientColors || [
+          themeColors['800'],
+          themeColors['900'],
+          themeColors['950']
+        ]} />
+      )}
+
+      {/* Color palette preview */}
+      <HStack spacing={4}>
+        {['400', '500', '600', '700'].map(shade => (
+          <View style={{ backgroundColor: themeColors[shade] }} />
+        ))}
+      </HStack>
+    </PressableFeedback>
+  );
+}
+```
+
+### Theme Persistence
+
+Theme selection is persisted in `settingsStore`:
+
+```typescript stores/settingsStore.ts
+interface SettingsState {
+  theme: string;  // Default: 'dark'
+}
+
+interface SettingsActions {
+  setTheme: (theme: string) => void;
+  getTheme: () => string;
+}
+```
+
+### Applying Theme Variables
+
+Themes are applied using Uniwind CSS variables:
+
+```tsx providers/ThemeProvider.tsx
+useEffect(() => {
+  const vars = themeVariables[currentTheme] ?? getThemeVariables(currentTheme);
+  Uniwind.updateCSSVariables('light', vars);
+  Uniwind.updateCSSVariables('dark', vars);
+}, [currentTheme]);
+```
+
+## Checking Theme Type
+
+Determine if a theme uses a background image:
+
+```typescript
+import { isBackgroundImageTheme } from 'config/backgroundImageThemes';
+
+const isWallpaper = isBackgroundImageTheme('cosmicpurple'); // true
+const isColor = isBackgroundImageTheme('dark'); // false
+```
+
+## Best Practices
+
+<Warning>
+  Always validate theme names before setting:
+  
+  ```typescript
+  if (THEMES[themeName as ThemeName]) {
+    setTheme(themeName);
+  } else {
+    console.warn(`Theme "${themeName}" not found`);
+  }
+  ```
+</Warning>
+
+<Tip>
+  Use theme colors in your components via Tailwind classes:
+  
+  ```tsx
+  <View className="bg-surface-primary text-foreground">
+    {/* Automatically adapts to current theme */}
+  </View>
+  ```
+</Tip>
+
+## Related Resources
+
+<Card title="Multi-Currency Display" icon="dollar-sign" href="/customization/multi-currency">
+  Configure fiat currency display preferences
+</Card>
+
+<Card title="Settings Overview" icon="gear" href="/customization/settings">
+  Explore all app configuration options
+</Card>

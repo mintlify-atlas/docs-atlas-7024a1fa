@@ -1,0 +1,375 @@
+---
+title: Passcode Lock
+description: Protect Sovran with a 4-digit PIN code that gates app access
+---
+
+Sovran supports optional passcode protection using a 4-digit PIN code. When enabled, the passcode must be entered each time you open the app.
+
+## Overview
+
+<Info>
+  The passcode is **never persisted to disk**. It only exists in memory during your session and protects against unauthorized physical access to your unlocked device.
+</Info>
+
+### How It Works
+
+1. **PasscodeGate** component wraps the app
+2. On launch, checks if passcode is set in settings store (memory-only)
+3. If set, displays **PasscodeScreen** until correct PIN is entered
+4. Once unlocked, app content is rendered
+
+<CodeGroup>
+```tsx PasscodeGate Component (components/blocks/passcode/PasscodeGate.tsx:5-18)
+const PasscodeGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const passcode = useSettingsStore((state) => state.passcode);
+  const [unlocked, setUnlocked] = useState(!passcode);
+
+  useEffect(() => {
+    if (!passcode) setUnlocked(true);
+  }, [passcode]);
+
+  if (passcode && !unlocked) {
+    return <PasscodeScreen passcode={passcode} onSuccess={() => setUnlocked(true)} />;
+  }
+
+  return <>{children}</>;
+};
+```
+
+```typescript Settings Store (stores/settingsStore.ts:164-167)
+// Passcode (never persisted)
+setPasscode: (passcode: string) => set({ passcode }),
+getPasscode: () => get().passcode,
+clearPasscode: () => set({ passcode: '' }),
+```
+</CodeGroup>
+
+## Setting Up a Passcode
+
+<Steps>
+  <Step title="Navigate to Settings">
+    Open the app and tap **Settings** → **Security** → **Set Passcode**.
+  </Step>
+  
+  <Step title="Enter Your PIN">
+    Enter a 4-digit PIN code using the numeric keyboard.
+  </Step>
+  
+  <Step title="Confirm Your PIN">
+    Re-enter the same 4-digit code to confirm.
+  </Step>
+  
+  <Step title="Passcode Active">
+    Your passcode is now active and will be required on next app launch.
+  </Step>
+</Steps>
+
+<Warning>
+  **Forgetting your passcode will prevent you from accessing your wallet.** The only recovery method is to uninstall and reinstall the app, then restore from your seed phrase.
+</Warning>
+
+## Passcode Settings Screen
+
+The passcode configuration flow has two steps:
+
+<Tabs>
+  <Tab title="Create">
+    **Enter new passcode**
+    
+    - Numeric keyboard with digits 0-9
+    - 4 dots showing entry progress
+    - Automatically advances to confirmation when 4 digits entered
+    
+    ```tsx Create Step (app/settings-pages/passcode.tsx:24-38)
+    const handlePress = (val: string) => {
+      if (step === 'create') {
+        if (val.length <= PASSCODE_LENGTH) {
+          setCode(val);
+          if (val.length === PASSCODE_LENGTH) {
+            setStep('confirm');
+            setKeyIdx((k) => k + 1);
+          }
+        }
+      } else {
+        if (val.length <= PASSCODE_LENGTH) {
+          setConfirm(val);
+        }
+      }
+    };
+    ```
+  </Tab>
+  
+  <Tab title="Confirm">
+    **Confirm passcode**
+    
+    - Re-enter the same 4 digits
+    - Must match the code from step 1
+    - Shows error popup if codes don't match
+    
+    ```tsx Confirm Logic (app/settings-pages/passcode.tsx:86-93)
+    onPress: async () => {
+      if (code === confirm && code.length === PASSCODE_LENGTH) {
+        setPasscode(code);
+        router.back();
+      } else {
+        passcodeNotMatchPopup();
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Passcode Entry Screen
+
+When the app is locked, users see:
+
+<Frame>
+  <img src="/images/passcode-screen.png" alt="Passcode entry screen" />
+</Frame>
+
+**Features:**
+- User avatar and welcome message
+- 4-dot progress indicator
+- Numeric keyboard (0-9 + backspace)
+- Shake animation on incorrect entry
+- Fade-out animation on success
+
+<CodeGroup>
+```tsx PasscodeScreen Component (components/blocks/passcode/PasscodeScreen.tsx:43-96)
+const PasscodeScreen: React.FC<Props> = ({ passcode, onSuccess }) => {
+  const { keys: nostrKeys } = useNostrKeysContext();
+  const [value, setValue] = useState('');
+  const [keyIdx, setKeyIdx] = useState(0);
+  const opacity = useRef(new Animated.Value(1)).current;
+  const shake = useRef(new Animated.Value(0)).current;
+
+  const handlePress = (val: string) => {
+    if (val.length > passcode.length) return;
+    setValue(val);
+    
+    if (val.length === passcode.length) {
+      if (val === passcode) {
+        // Success: fade out and unlock
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => onSuccess());
+      } else {
+        // Failure: shake animation and reset
+        Animated.sequence([
+          Animated.timing(shake, { toValue: -10, duration: 50, useNativeDriver: true }),
+          Animated.timing(shake, { toValue: 10, duration: 50, useNativeDriver: true }),
+          Animated.timing(shake, { toValue: -10, duration: 50, useNativeDriver: true }),
+          Animated.timing(shake, { toValue: 0, duration: 50, useNativeDriver: true }),
+        ]).start();
+        
+        setTimeout(() => {
+          setValue('');
+          setKeyIdx((k) => k + 1);
+        }, 200);
+      }
+    }
+  };
+
+  return (
+    <BlurView className="bg-background flex-1">
+      <Animated.View style={{ opacity, transform: [{ translateX: shake }] }}>
+        <VStack align="center" justify="center" flex={1}>
+          <Avatar seed={nostrKeys?.pubkey} size={80} />
+          <Text>Welcome back, {getUsername(nostrKeys?.pubkey || '')}</Text>
+          
+          {/* Dot indicators */}
+          <HStack>
+            {Array.from({ length: passcode.length }).map((_, i) => (
+              <View
+                key={i}
+                className={`mx-1.5 h-3 w-3 rounded-full ${
+                  value.length > i ? 'bg-foreground' : 'border-foreground border'
+                }`}
+              />
+            ))}
+          </HStack>
+          
+          <NumericKeyboard onKeyPress={handlePress} />
+        </VStack>
+      </Animated.View>
+    </BlurView>
+  );
+};
+```
+</CodeGroup>
+
+## Numeric Keyboard
+
+The custom numeric keyboard provides:
+
+- **Digits 0-9**: Standard numeric input
+- **Backspace (⌫)**: Delete last digit
+- **Haptic feedback**: Button press and action haptics
+- **Ripple animations**: Visual feedback on tap
+
+<CodeGroup>
+```tsx NumericKeyboard Component (components/blocks/passcode/NumericKeyboard.tsx:64-105)
+const NumericKeyboard: React.FC<Props> = ({ onKeyPress }) => {
+  const inputRef = useRef('');
+
+  const handlePress = useCallback(
+    (value: KeyVal) => {
+      let newValue: string;
+      if (String(value) === '<') {
+        EnhancedHaptics.actionHaptic();
+        newValue = inputRef.current.slice(0, -1);
+      } else {
+        EnhancedHaptics.buttonHaptic();
+        newValue = inputRef.current + String(value);
+      }
+      inputRef.current = newValue;
+      onKeyPress(newValue);
+    },
+    [onKeyPress]
+  );
+
+  const buttons: KeyVal[][] = [
+    ['1', '2', '3'],
+    ['4', '5', '6'],
+    ['7', '8', '9'],
+    ['', '0', '<'],
+  ];
+
+  return (
+    <VStack align="center">
+      {buttons.map((row, rowIndex) => (
+        <HStack key={rowIndex} justify="space-between">
+          {row.map(renderButton)}
+        </HStack>
+      ))}
+    </VStack>
+  );
+};
+```
+</CodeGroup>
+
+## Security Characteristics
+
+### Memory-Only Storage
+
+<Info>
+  The passcode is **never written to disk**. It only exists in the Zustand store's memory state.
+</Info>
+
+From `stores/settingsStore.ts:235-252`:
+
+```typescript Persistence Configuration
+persist(
+  (set, get) => ({ /* store definition */ }),
+  {
+    name: 'settings-store',
+    storage: createJSONStorage(() => AsyncStorage),
+    partialize: (state) => ({
+      theme: state.theme,
+      language: state.language,
+      displayBtc: state.displayBtc,
+      displayCurrency: state.displayCurrency,
+      // ... other settings
+      // NOTE: passcode is NOT included in persisted state
+    }),
+  }
+)
+```
+
+### Threat Model
+
+<Check>Protects against unauthorized access to unlocked device</Check>
+<Check>Prevents casual snooping by others nearby</Check>
+<Check>Adds friction for physical theft scenarios</Check>
+
+<Warning>Does NOT protect against:</Warning>
+<Warning>- Sophisticated attackers with device access</Warning>
+<Warning>- Malware or keyloggers</Warning>
+<Warning>- Forced biometric unlock</Warning>
+<Warning>- Memory inspection attacks</Warning>
+
+### Limitations
+
+1. **Session-based**: Passcode is lost when app is fully terminated
+2. **4-digit only**: Limited entropy (10,000 possible combinations)
+3. **No biometric option**: PIN-only (biometrics planned for future)
+4. **No rate limiting**: Can attempt unlimited passcodes (mitigated by manual entry slowness)
+
+<Note>
+  For maximum security, combine passcode lock with full-disk encryption and device lock screen protection.
+</Note>
+
+## Resetting Your Passcode
+
+### If You Remember Current Passcode
+
+<Steps>
+  <Step title="Enter App">
+    Unlock with your current passcode.
+  </Step>
+  
+  <Step title="Clear Passcode">
+    Go to **Settings** → **Security** → **Clear Passcode**.
+  </Step>
+  
+  <Step title="Set New Passcode">
+    Optionally set a new passcode immediately.
+  </Step>
+</Steps>
+
+### If You Forgot Your Passcode
+
+<Warning>
+  There is **no passcode recovery mechanism**. You must reinstall the app and restore from seed phrase.
+</Warning>
+
+<Steps>
+  <Step title="Ensure You Have Seed Phrase">
+    Locate your 12-word recovery phrase backup. Without it, you will lose access to your funds.
+  </Step>
+  
+  <Step title="Uninstall Sovran">
+    Remove the app from your device. This clears all local data including the passcode.
+  </Step>
+  
+  <Step title="Reinstall and Restore">
+    Install Sovran fresh and restore from your seed phrase.
+  </Step>
+  
+  <Step title="Set New Passcode">
+    Configure a new passcode (optional).
+  </Step>
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Choose a Strong PIN" icon="shield-check">
+    Avoid obvious codes like 1234, 0000, or your birth year.
+  </Card>
+  
+  <Card title="Remember Your PIN" icon="brain">
+    Use a memorable but non-obvious number. Write it down separately from your seed phrase.
+  </Card>
+  
+  <Card title="Device Lock First" icon="mobile">
+    Enable device-level lock screen protection as primary security.
+  </Card>
+  
+  <Card title="Seed Phrase Backup" icon="file-shield">
+    Always maintain a secure backup of your seed phrase in case you need to reinstall.
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Wallet Recovery" icon="rotate-left" href="/security/wallet-recovery">
+    Restore from seed phrase if passcode is lost
+  </Card>
+  <Card title="Privacy Features" icon="user-secret" href="/security/privacy-features">
+    Other privacy protections in Sovran
+  </Card>
+</CardGroup>

@@ -1,0 +1,480 @@
+---
+title: Location Stamps
+description: Attach GPS coordinates to transactions for record-keeping
+---
+
+## Overview
+
+Sovran can attach GPS location stamps to transactions, creating a geographic record of where each payment was made. Location data is stored locally and never shared without your explicit consent.
+
+## Location Capture
+
+### Automatic Capture
+
+When enabled, location is captured at the moment of transaction creation:
+
+```typescript hooks/useTransactionLocation.ts
+export async function getLocationForTransaction(): Promise<TransactionCoordinates | null> {
+  try {
+    // Check if location stamping is enabled
+    if (!useSettingsStore.getState().sendLocationEnabled) {
+      return null;
+    }
+
+    // Request/check permission
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      return null;
+    }
+
+    // Get current position
+    const location = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+
+    return {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    };
+  } catch (error) {
+    console.error('[getLocationForTransaction] Failed:', error);
+    return null;
+  }
+}
+```
+
+### Combined Capture and Storage
+
+```typescript hooks/useTransactionLocation.ts
+export async function captureAndStoreLocation(transactionId: string): Promise<boolean> {
+  const location = await getLocationForTransaction();
+  if (!location) return false;
+
+  useTransactionLocationStore.getState().setTransactionLocation(transactionId, location);
+  return true;
+}
+```
+
+## Location Storage
+
+Location data is stored in a profile-scoped Zustand store:
+
+```typescript stores/transactionLocationStore.ts
+export interface TransactionLocation {
+  latitude: number;
+  longitude: number;
+  createdAt: number;
+}
+
+export type TransactionCoordinates = Omit<TransactionLocation, 'createdAt'>;
+
+interface TransactionLocationState {
+  locations: Record<string, TransactionLocation>;
+}
+
+interface TransactionLocationActions {
+  setTransactionLocation: (
+    entryId: string,
+    location: Omit<TransactionLocation, 'createdAt'>
+  ) => void;
+  getTransactionLocation: (entryId: string) => TransactionLocation | null;
+  removeTransactionLocation: (entryId: string) => void;
+  clearAllLocations: () => void;
+  clearAllData: () => Promise<void>;
+}
+```
+
+### Store Implementation
+
+```typescript stores/transactionLocationStore.ts
+export const useTransactionLocationStore = create<TransactionLocationStore>()(
+  persist(
+    (set, get) => ({
+      locations: {},
+
+      setTransactionLocation: (
+        entryId: string,
+        location: Omit<TransactionLocation, 'createdAt'>
+      ) => {
+        set((state) => ({
+          locations: {
+            ...state.locations,
+            [entryId]: {
+              ...location,
+              createdAt: Date.now(),
+            },
+          },
+        }));
+      },
+
+      getTransactionLocation: (entryId: string) => {
+        const state = get();
+        return state.locations[entryId] ?? null;
+      },
+
+      removeTransactionLocation: (entryId: string) => {
+        set((state) => {
+          const { [entryId]: _, ...rest } = state.locations;
+          return { locations: rest };
+        });
+      },
+
+      clearAllLocations: () => {
+        set({ locations: {} });
+      },
+
+      clearAllData: async () => {
+        try {
+          await profileStorage.removeItem('transaction-location-store');
+          set({ locations: {} });
+        } catch (error) {
+          console.error('TransactionLocationStore: Error clearing data:', error);
+          throw error;
+        }
+      },
+    }),
+    {
+      name: 'transaction-location-store',
+      storage: createJSONStorage(() => createProfileScopedStorage()),
+      partialize: (state) => ({
+        locations: state.locations,
+      }),
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          console.warn('TransactionLocationStore: Failed to rehydrate from storage:', error);
+        }
+      },
+    }
+  )
+);
+```
+
+## Location Display
+
+### Privacy-First UI
+
+Location data is hidden by default with a blurred preview:
+
+```typescript components/blocks/TransactionLocationSection.tsx
+function LocationPrivacyPlaceholder({ onReveal }: { onReveal: () => void }) {
+  const foreground = useThemeColor('foreground');
+  const isIOS = Platform.OS === 'ios';
+
+  const previewCameraPosition = {
+    coordinates: { latitude: 51.5074, longitude: -0.1278 },
+    zoom: 14,
+  };
+
+  return (
+    <TouchableOpacity onPress={onReveal} activeOpacity={0.7}>
+      <View className={MAP_CONTAINER_CN}>
+        <View className="absolute inset-0" pointerEvents="none">
+          {isIOS ? (
+            <AppleMaps.View
+              style={StyleSheet.absoluteFillObject}
+              cameraPosition={previewCameraPosition}
+              properties={{ isMyLocationEnabled: false, pointsOfInterest: { including: [] } }}
+              uiSettings={DISABLED_MAP_UI_SETTINGS}
+            />
+          ) : HAS_ANDROID_GOOGLE_MAPS_KEY ? (
+            <GoogleMaps.View
+              style={StyleSheet.absoluteFillObject}
+              cameraPosition={previewCameraPosition}
+              colorScheme={GoogleMaps.MapColorScheme.DARK}
+              properties={{
+                isMyLocationEnabled: false,
+                mapStyleOptions: { json: GOOGLE_MAPS_NO_LABELS_STYLE },
+              }}
+              uiSettings={DISABLED_MAP_UI_SETTINGS}
+            />
+          ) : (
+            <View className="absolute inset-0" />
+          )}
+          <MapGrayscaleOverlay withBlur />
+        </View>
+
+        <View className="absolute inset-0 items-center justify-center">
+          <VStack align="center" gap={6}>
+            <Icon name="mdi:map-marker" size={24} color={opacity(foreground, 0.75)} />
+            <Text heavy size={13} style={{ color: opacity(foreground, 0.75) }}>
+              Tap to reveal location
+            </Text>
+          </VStack>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+```
+
+### Map Display
+
+After revealing, a grayscale map shows the transaction location:
+
+```typescript components/blocks/TransactionLocationSection.tsx
+function TransactionLocationMap({
+  latitude,
+  longitude,
+  grayscale = false,
+}: {
+  latitude: number;
+  longitude: number;
+  grayscale?: boolean;
+}) {
+  const isIOS = Platform.OS === 'ios';
+  const shade300 = useThemeColor('shade-300');
+
+  const markerConfig = [
+    {
+      id: 'transaction-location',
+      coordinates: { latitude, longitude },
+      tintColor: grayscale ? '#FFFFFF' : shade300,
+      title: 'Transaction location',
+    },
+  ];
+
+  const cameraPosition = {
+    coordinates: { latitude, longitude },
+    zoom: 14,
+  };
+
+  return (
+    <View className={MAP_CONTAINER_CN} pointerEvents="none">
+      {isIOS ? (
+        <AppleMaps.View
+          style={StyleSheet.absoluteFillObject}
+          cameraPosition={cameraPosition}
+          properties={{ isMyLocationEnabled: false }}
+          uiSettings={DISABLED_MAP_UI_SETTINGS}
+          markers={markerConfig}
+        />
+      ) : HAS_ANDROID_GOOGLE_MAPS_KEY ? (
+        <GoogleMaps.View
+          style={StyleSheet.absoluteFillObject}
+          cameraPosition={cameraPosition}
+          colorScheme={GoogleMaps.MapColorScheme.DARK}
+          properties={{ isMyLocationEnabled: false }}
+          uiSettings={DISABLED_MAP_UI_SETTINGS}
+          markers={markerConfig}
+        />
+      ) : (
+        <View className="absolute inset-0" />
+      )}
+      {grayscale && <MapGrayscaleOverlay />}
+    </View>
+  );
+}
+```
+
+### Grayscale Overlay
+
+Maps use a grayscale overlay for a muted appearance:
+
+```typescript components/blocks/TransactionLocationSection.tsx
+function MapGrayscaleOverlay({ withBlur = false }: { withBlur?: boolean }) {
+  const surfaceSecondary = useThemeColor('surface-secondary');
+
+  return (
+    <>
+      <View
+        className="absolute inset-0"
+        style={{
+          backgroundColor: 'black',
+          // @ts-ignore - mixBlendMode supported on iOS
+          mixBlendMode: 'saturation',
+        }}
+        pointerEvents="none"
+      />
+      <View
+        className="absolute inset-0"
+        style={{ backgroundColor: 'rgba(0, 0, 0, 0.15)' }}
+        pointerEvents="none"
+      />
+
+      {withBlur && <BlurView intensity={10} tint="dark" style={StyleSheet.absoluteFillObject} />}
+
+      <View
+        className="absolute inset-0"
+        style={{
+          backgroundColor: opacity(surfaceSecondary, 0.35),
+          // @ts-ignore - mixBlendMode works on iOS
+          mixBlendMode: 'overlay',
+        }}
+        pointerEvents="none"
+      />
+
+      {/* Vignette gradients */}
+      <LinearGradient
+        colors={[
+          surfaceSecondary,
+          opacity(surfaceSecondary, 0.1),
+          opacity(surfaceSecondary, 0.1),
+          surfaceSecondary,
+        ]}
+        locations={[0, 0.3, 0.7, 1]}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
+    </>
+  );
+}
+```
+
+## Section Hook
+
+Manage location section state and actions:
+
+```typescript hooks/useTransactionLocationSection.ts
+export interface UseTransactionLocationSectionResult {
+  location: TransactionLocation | null;
+  isRevealed: boolean;
+  reveal: () => void;
+  hide: () => void;
+  isLocationEnabled: boolean;
+  setLocationEnabled: (enabled: boolean) => void;
+  isCapturing: boolean;
+  attachCurrentLocation: () => Promise<boolean>;
+  justEnabled: boolean;
+}
+
+export function useTransactionLocationSection(
+  transactionId: string | undefined
+): UseTransactionLocationSectionResult {
+  const location = useTransactionLocation(transactionId);
+  const [isRevealed, setIsRevealed] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [justEnabled, setJustEnabled] = useState(false);
+
+  const isLocationEnabled = useSettingsStore((state) => state.sendLocationEnabled);
+  const setSendLocationEnabled = useSettingsStore((state) => state.setSendLocationEnabled);
+  const setTransactionLocation = useTransactionLocationStore(
+    (state) => state.setTransactionLocation
+  );
+
+  const reveal = useCallback(() => {
+    setIsRevealed(true);
+  }, []);
+
+  const hide = useCallback(() => {
+    setIsRevealed(false);
+  }, []);
+
+  const setLocationEnabled = useCallback(
+    (enabled: boolean) => {
+      setSendLocationEnabled(enabled);
+      setJustEnabled(enabled);
+    },
+    [setSendLocationEnabled]
+  );
+
+  const attachCurrentLocation = useCallback(async (): Promise<boolean> => {
+    if (!transactionId) return false;
+
+    setIsCapturing(true);
+    try {
+      // Temporarily enable location to get the current position
+      useSettingsStore.getState().setSendLocationEnabled(true);
+
+      const capturedLocation = await getLocationForTransaction();
+
+      if (capturedLocation) {
+        setTransactionLocation(transactionId, capturedLocation);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to capture location:', error);
+      return false;
+    } finally {
+      setIsCapturing(false);
+    }
+  }, [transactionId, setTransactionLocation]);
+
+  return {
+    location,
+    isRevealed,
+    reveal,
+    hide,
+    isLocationEnabled,
+    setLocationEnabled,
+    isCapturing,
+    attachCurrentLocation,
+    justEnabled,
+  };
+}
+```
+
+## Settings
+
+Enable location stamping in settings:
+
+```typescript stores/settingsStore.ts
+interface SettingsState {
+  sendLocationEnabled: boolean;
+  // ...
+}
+
+setSendLocationEnabled: (enabled: boolean) => set({ sendLocationEnabled: enabled }),
+getSendLocationEnabled: () => get().sendLocationEnabled,
+```
+
+Default: **Disabled**
+
+## Privacy Considerations
+
+- Location data is stored **locally only**
+- Never transmitted or shared automatically
+- Each transaction location can be revealed individually
+- No location data in ecash tokens themselves
+- Can be disabled or cleared at any time
+
+## Platform Support
+
+### iOS
+
+Uses Apple Maps for display:
+
+```typescript
+<AppleMaps.View
+  style={StyleSheet.absoluteFillObject}
+  cameraPosition={cameraPosition}
+  properties={{ isMyLocationEnabled: false }}
+  uiSettings={DISABLED_MAP_UI_SETTINGS}
+  markers={markerConfig}
+/>
+```
+
+### Android
+
+Uses Google Maps for display (requires API key):
+
+```typescript
+<GoogleMaps.View
+  style={StyleSheet.absoluteFillObject}
+  cameraPosition={cameraPosition}
+  colorScheme={GoogleMaps.MapColorScheme.DARK}
+  properties={{ isMyLocationEnabled: false }}
+  uiSettings={DISABLED_MAP_UI_SETTINGS}
+  markers={markerConfig}
+/>
+```
+
+## Use Cases
+
+### Expense Tracking
+
+Attach locations to payments for geographic expense reports
+
+### Travel Records
+
+Create a map of where you've used ecash during trips
+
+### Business Accounting
+
+Track where business payments were made for tax purposes
+
+### Personal Finance
+
+Visualize spending patterns by location

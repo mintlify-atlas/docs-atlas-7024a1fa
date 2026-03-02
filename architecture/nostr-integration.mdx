@@ -1,0 +1,547 @@
+---
+title: 'Nostr Integration'
+description: 'NDK, gift-wrapped DMs, social graph, and payment requests'
+icon: 'satellite-dish'
+---
+
+## Nostr Overview
+
+Sovran deeply integrates [Nostr](https://nostr.com) for identity, messaging, and social features. The app uses **NDK (Nostr Development Kit)** via the `@nostr-dev-kit/ndk-mobile` package.
+
+### What Sovran Uses Nostr For
+
+<CardGroup cols={2}>
+  <Card title="Identity" icon="id-card">
+    Your wallet identity is your Nostr identity (npub/nsec derived from BIP-39 seed)
+  </Card>
+  
+  <Card title="Messaging" icon="comments">
+    Encrypted peer-to-peer messaging with NIP-17 gift-wrapped DMs
+  </Card>
+  
+  <Card title="Social Graph" icon="diagram-project">
+    Follow/follower relationships, user profiles, reputation scores
+  </Card>
+  
+  <Card title="Payment Requests" icon="file-invoice-dollar">
+    Send payment requests over Nostr (NUT-18) without Lightning
+  </Card>
+</CardGroup>
+
+## Key Derivation (NIP-06)
+
+All Nostr keys derive from the wallet's BIP-39 mnemonic using NIP-06:
+
+providers/NostrKeysProvider.tsx:244-378
+
+**Derivation path:** `m/44'/1237'/0'/0/{accountIndex}`
+
+This produces:
+- **Private key** (32 bytes) → nsec (Bech32 encoded)
+- **Public key** (32 bytes) → npub (Bech32 encoded)
+
+### Key Caching
+
+To avoid expensive re-derivation (200ms), derived keys are cached in expo-secure-store:
+
+```tsx
+interface CachedDerivedKeys {
+  npub: string;
+  nsec: string;
+  pubkey: string;           // Hex public key
+  privateKeyHex: string;    // Hex private key
+  mnemonicHash: string;     // Hash of source mnemonic (for validation)
+}
+
+// Fast path: <5ms
+const cached = await retrieveDerivedKeys(accountIndex);
+if (cached && cached.mnemonicHash === currentMnemonicHash) {
+  // Use cached keys
+  return { ...cached, privateKey: hexToBytes(cached.privateKeyHex) };
+}
+
+// Slow path: ~200ms
+const keys = deriveNostrKeys(mnemonic, accountIndex);
+await storeDerivedKeys(accountIndex, { ...keys, mnemonicHash });
+return keys;
+```
+
+The cache is invalidated when the mnemonic changes (e.g., wallet restore).
+
+## NDK Initialization
+
+providers/NostrNDKProvider.tsx:1-68
+
+**Initialization flow:**
+
+1. Create `NDKCacheAdapterSqlite` with profile-specific database
+   - Account 0: `nostr`
+   - Account N: `nostr-N`
+
+2. Create `NDKPrivateKeySigner` from derived private key
+
+3. Initialize NDK with:
+   - Cache adapter
+   - Relay list (28 relays)
+   - Signer for signing events
+
+4. Connect to relays (non-blocking)
+
+components/ndk.ts:1-31
+
+## Relay Strategy
+
+Sovran connects to 28 public relays for maximum reach:
+
+- **purplepag.es** - Profile pages
+- **relay.primal.net** - Primal cache
+- **relay.damus.io** - Damus relay
+- **relay.snort.social** - Snort relay
+- **nos.lol** - Nos relay
+- **nostr.mutinywallet.com** - Mutiny wallet relay
+- Plus 22 more (see components/ndk.ts:1-31)
+
+NDK automatically:
+- Manages connections (auto-reconnect on failure)
+- Routes queries to optimal relays
+- Caches events in SQLite
+- Deduplicates events across relays
+
+## Profile Management
+
+### Fetching Profiles
+
+```tsx
+import { useNDK } from '@nostr-dev-kit/ndk-mobile';
+import { nip19 } from 'nostr-tools';
+
+const { getProfile } = useNDK();
+
+// Get profile by npub
+const npub = 'npub1...';
+const { data: decoded } = nip19.decode(npub);
+const profile = await getProfile(decoded.data as string);
+
+// profile contains:
+interface NostrProfile {
+  name?: string;
+  display_name?: string;
+  displayName?: string;  // Normalized field
+  about?: string;
+  picture?: string;      // Avatar URL
+  banner?: string;       // Banner image URL
+  website?: string;
+  lud16?: string;        // Lightning address
+  nip05?: string;        // NIP-05 verification
+}
+```
+
+### Username Resolution
+
+Sovran uses a username hierarchy:
+
+```tsx
+// helper/username.ts
+export function getUsername(pubkey: string): string {
+  const profile = getProfileFromCache(pubkey);
+  
+  // Priority order:
+  return (
+    profile?.displayName ||  // NIP-01 display_name
+    profile?.display_name || 
+    profile?.name ||         // NIP-01 name
+    profile?.nip05 ||        // user@domain.com
+    `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}` // Fallback to truncated pubkey
+  );
+}
+```
+
+### NIP-05 Verification
+
+NIP-05 allows linking Nostr identities to domain names (like `user@domain.com`):
+
+```tsx
+import { verifyNip05 } from 'nostr-tools/nip05';
+
+const nip05 = 'user@domain.com';
+const pubkey = 'abc123...';
+
+const verified = await verifyNip05(nip05, pubkey);
+if (verified) {
+  // Display verified badge
+}
+```
+
+Sovran shows a checkmark badge next to verified NIP-05 identities.
+
+## Direct Messages (NIP-17)
+
+Sovran uses **NIP-17 gift-wrapped DMs** for private messaging:
+
+### Why NIP-17 over NIP-04?
+
+| Feature | NIP-04 | NIP-17 |
+|---------|--------|--------|
+| **Encryption** | NIP-04 (shared secret) | NIP-44 (XChaCha20-Poly1305) |
+| **Metadata leak** | Sender/recipient visible | Hidden via gift wrap |
+| **Repudiation** | Non-repudiable | Repudiable (ephemeral keys) |
+| **Relay hints** | No | Yes (improves routing) |
+
+NIP-17 provides **stronger privacy** by hiding who is messaging whom.
+
+### Message Structure (NIP-17)
+
+utils/nip17.ts implements the NIP-17 gift wrap protocol:
+
+```tsx
+// 1. Rumor (actual message content)
+const rumor = {
+  kind: 14,  // Private Direct Message
+  content: 'Hello!',
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [
+    ['p', recipientPubkey]  // Recipient
+  ]
+};
+
+// 2. Seal (NIP-44 encrypted rumor)
+const seal = {
+  kind: 13,  // Seal
+  content: await nip44Encrypt(JSON.stringify(rumor), conversationKey),
+  created_at: randomTimestamp(), // Fuzzy timestamp for privacy
+  tags: []
+};
+
+// 3. Gift Wrap (outer layer)
+const giftWrap = {
+  kind: 1059,  // Gift Wrap
+  content: await nip44Encrypt(JSON.stringify(seal), recipientPubkey),
+  created_at: randomTimestamp(),
+  tags: [
+    ['p', recipientPubkey]  // Only recipient can unwrap
+  ],
+  pubkey: ephemeralPubkey   // Random ephemeral key (not your real identity)
+};
+```
+
+**Privacy properties:**
+- Relays see: kind 1059, ephemeral pubkey, recipient pubkey
+- Relays cannot see: sender identity, message content, timestamp
+- Only recipient can unwrap and decrypt
+
+### Sending Messages
+
+hooks/useNostrDirectMessage.ts handles message sending:
+
+```tsx
+import { useNostrDirectMessage } from '@/hooks/useNostrDirectMessage';
+
+const { sendMessage, isLoading, error } = useNostrDirectMessage();
+
+await sendMessage({
+  recipientPubkey: 'abc123...',
+  content: 'Hello!',
+  replyTo?: 'event-id-to-reply-to'
+});
+```
+
+### Receiving Messages
+
+components/screens/UserMessagesScreen.tsx displays conversations:
+
+```tsx
+// Subscribe to incoming DMs (kind 1059 gift wraps)
+const subscription = ndk.subscribe({
+  kinds: [1059],
+  '#p': [myPubkey]  // Only messages addressed to me
+});
+
+subscription.on('event', async (event) => {
+  // 1. Unwrap gift wrap
+  const seal = await nip44Decrypt(event.content, myPrivateKey);
+  
+  // 2. Unwrap seal
+  const rumor = await nip44Decrypt(seal.content, conversationKey);
+  
+  // 3. Display message
+  displayMessage(rumor);
+});
+```
+
+### Message Types
+
+app/message/components/ defines custom message types:
+
+- **TextMessage.tsx** - Plain text messages
+- **CashuTokenMessage.tsx** - Inline ecash token transfers
+- **PaymentMessage.tsx** - Payment requests and invoices
+
+```tsx
+// Send ecash token in DM
+const token = 'cashuAeyJ0b2tlbiI6...';
+await sendMessage({
+  recipientPubkey,
+  content: `[cashu]${token}[/cashu]`  // Custom format
+});
+
+// Receiver taps inline token to redeem
+```
+
+## Social Graph
+
+### Follower/Following Counts
+
+```tsx
+import { useNostrProfile } from '@/hooks/useNostrProfile';
+
+const { profile, followerCount, followingCount } = useNostrProfile(pubkey);
+
+// Counts come from kind 3 (contact list) events
+```
+
+### Top Followers
+
+The profile screen shows your most influential followers:
+
+```tsx
+const { topFollowers, rank } = useNostrProfile(pubkey);
+
+// topFollowers: Array of followers sorted by their follower count
+// rank: Your position in the Nostr social graph (estimated)
+```
+
+### Contact Search
+
+components/blocks/contacts/SearchResult.tsx handles Nostr profile search:
+
+```tsx
+import { searchProfiles } from '@/helper/nostr';
+
+// Search by name, npub, or NIP-05
+const results = await searchProfiles('alice');
+
+// results contains:
+interface SearchResult {
+  pubkey: string;
+  profile: NostrProfile;
+  nip05Verified: boolean;
+  followerCount: number;
+}
+```
+
+## Payment Requests (NUT-18 + Nostr)
+
+Sovran supports **NUT-18 payment requests** over Nostr transport:
+
+### Creating Payment Requests
+
+```tsx
+import { encodePaymentRequest } from '@cashu/cashu-ts';
+
+const request = encodePaymentRequest({
+  amount: 1000,     // Optional
+  unit: 'sat',      // Optional
+  mints: ['https://mint.example.com'],  // Optional
+  transport: [{
+    type: 'nostr',
+    target: myPubkey,  // Where to send the payment
+    tags: [['relay', 'wss://relay.damus.io']]  // Relay hints
+  }]
+});
+
+// request = 'creqA1234...' (Bech32 encoded)
+
+// Share via QR code or paste
+```
+
+### Receiving Payment Requests
+
+hooks/coco/useProcessPaymentString.ts:216-331
+
+When a user scans a payment request:
+
+1. Decode to extract amount, mints, Nostr pubkey
+2. Calculate valid mints (balance check)
+3. Route to appropriate screen based on available data
+4. Show "Send to [username]" with their profile
+5. User confirms and sends ecash
+6. Token sent via NIP-17 DM to recipient
+7. Recipient auto-redeems inline token
+
+**Routing logic:**
+
+hooks/coco/useProcessPaymentString.ts:241-331
+
+This minimizes friction by skipping screens when data is already known.
+
+## Nostr Event Types
+
+Sovran works with these Nostr event kinds:
+
+| Kind | Name | Purpose |
+|------|------|----------|
+| 0 | Profile | User metadata (name, picture, about) |
+| 1 | Text note | Public posts (feed) |
+| 3 | Contact list | Following list |
+| 4 | DM (deprecated) | Old encrypted DMs (legacy) |
+| 13 | Seal | NIP-17 encrypted rumor |
+| 14 | Private DM | NIP-17 actual message content |
+| 1059 | Gift wrap | NIP-17 outer encryption layer |
+| 10000 | Mute list | Blocked users |
+| 38000 | Cashu mint | Mint recommendations (KYM) |
+
+## NDK Caching
+
+NDK caches all events in SQLite for fast retrieval:
+
+```tsx
+// Cache adapter per profile
+const cacheAdapter = new NDKCacheAdapterSqlite(
+  accountIndex === 0 ? 'nostr' : `nostr-${accountIndex}`
+);
+
+// Automatically caches:
+// - User profiles (kind 0)
+// - Contact lists (kind 3)
+// - DMs (kind 1059)
+// - Public notes (kind 1)
+
+// Queries check cache first, then relays
+const profile = await getProfile(pubkey);
+// ↑ Returns cached data instantly if available
+```
+
+Cache TTL is managed by NDK based on event kind:
+- Profiles: 1 hour
+- Contact lists: 1 hour  
+- DMs: Permanent
+- Public notes: 5 minutes
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always verify NIP-05 before showing badges">
+    Don't trust `nip05` field blindly - verify it:
+    
+    ```tsx
+    import { verifyNip05 } from 'nostr-tools/nip05';
+    
+    const profile = await getProfile(pubkey);
+    if (profile.nip05) {
+      const verified = await verifyNip05(profile.nip05, pubkey);
+      if (verified) {
+        // Show verified badge
+      }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle profile loading gracefully">
+    Profiles may not be available immediately:
+    
+    ```tsx
+    const { profile, isLoading } = useNostrProfile(pubkey);
+    
+    if (isLoading) {
+      return <Skeleton />;
+    }
+    
+    if (!profile) {
+      // Show fallback: truncated pubkey
+      return <Text>{pubkey.slice(0, 8)}...</Text>;
+    }
+    
+    return <Text>{profile.displayName}</Text>;
+    ```
+  </Accordion>
+  
+  <Accordion title="Use relay hints for DMs">
+    Include relay hints in NIP-17 gift wraps to improve delivery:
+    
+    ```tsx
+    const giftWrap = {
+      kind: 1059,
+      // ...
+      tags: [
+        ['p', recipientPubkey],
+        ['relay', 'wss://relay.damus.io'],  // Hint where recipient reads
+      ]
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="Sanitize user-generated content">
+    Always sanitize profile data before displaying:
+    
+    ```tsx
+    import DOMPurify from 'isomorphic-dompurify';
+    
+    const sanitizedAbout = DOMPurify.sanitize(profile.about);
+    const sanitizedName = profile.name?.replace(/[^\w\s]/g, '');
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle offline gracefully">
+    NDK operations may fail when offline:
+    
+    ```tsx
+    try {
+      await sendMessage({ recipientPubkey, content });
+    } catch (error) {
+      if (error.message.includes('offline')) {
+        // Queue for later
+        await queueMessage({ recipientPubkey, content });
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Nostr + Cashu Integration
+
+The power of Sovran comes from combining Nostr identity with Cashu ecash:
+
+```tsx
+// Scenario: Send payment to Nostr user
+
+// 1. User enters npub or searches by name
+const profile = await getProfile(recipientPubkey);
+
+// 2. Create payment request
+const request = encodePaymentRequest({
+  amount: 1000,
+  unit: 'sat',
+  transport: [{ type: 'nostr', target: recipientPubkey }]
+});
+
+// 3. User scans request, selects mint, sends ecash
+const token = await manager.send.finalize(operationId);
+
+// 4. Send token via NIP-17 DM
+await sendMessage({
+  recipientPubkey,
+  content: `[cashu]${token}[/cashu]`
+});
+
+// 5. Recipient receives DM, auto-redeems token
+const receivedToken = parseTokenFromMessage(message.content);
+await manager.wallet.receive({ token: receivedToken });
+```
+
+This flow:
+- ✅ No Lightning invoices needed
+- ✅ Works offline (async messaging)
+- ✅ Private (NIP-17 encryption + Cashu blinding)
+- ✅ Permissionless (no accounts, no KYC)
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" href="/architecture/overview" icon="sitemap">
+    See how Nostr fits into the overall architecture
+  </Card>
+  
+  <Card title="Cashu Integration" href="/architecture/cashu-integration" icon="coins">
+    Learn how payment requests integrate with Cashu operations
+  </Card>
+</CardGroup>

@@ -1,0 +1,208 @@
+---
+title: Cashu NUTs
+description: Supported Cashu Notation, Usage, and Terminology (NUT) specifications in Sovran
+---
+
+Sovran implements a comprehensive set of Cashu NUTs (Notation, Usage, and Terminology) through the `coco-cashu-core` library for ecash operations.
+
+## Supported NUTs
+
+Sovran supports **NUT-00 through NUT-13, NUT-17, NUT-18, and NUT-23**.
+
+### Core Protocol (NUT-00 to NUT-13)
+
+The core Cashu protocol implementation includes:
+
+- **NUT-00**: Cryptographic primitives and basic ecash operations
+- **NUT-01**: Mint public key distribution
+- **NUT-02**: Keysets and keyset IDs
+- **NUT-03**: Token format and encoding
+- **NUT-04**: Minting tokens (requesting ecash from mints)
+- **NUT-05**: Melting tokens (paying Lightning invoices with ecash)
+- **NUT-06**: Token state checking
+- **NUT-07**: Spendable check (verify token validity)
+- **NUT-08**: Overpaid Lightning fees handling
+- **NUT-09**: Restore (recovering tokens from a seed)
+- **NUT-10**: Spending conditions (P2PK and other locking mechanisms)
+- **NUT-11**: Pay-to-Public-Key (P2PK)
+- **NUT-12**: DLEQ proofs for verifiable token issuance
+- **NUT-13**: Deterministic wallet derivation
+
+### Advanced Features
+
+#### NUT-17: Multi-Mint Swaps
+
+Sovran's rebalancing system leverages multi-mint swap capabilities:
+
+```typescript
+// Source: components/blocks/rebalance/routing.ts
+// Supports middleman routing chains for mints that can't swap directly
+```
+
+Implementation details:
+- Set max hops for routing chains (`app/settings-pages/routing.tsx:222-226`)
+- Configure max fee percentage for swaps
+- Define minimum success rate requirements
+- Choose trust mode for routing
+
+#### NUT-18: Payment Requests
+
+Nostr-based payment requests enable sending ecash directly over the Nostr network without Lightning invoices.
+
+**Detection and Validation** (`hooks/coco/useProcessPaymentString.ts:29-45`):
+
+```typescript
+const isNostrPaymentRequest = (data: string): boolean => {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith('creqA')) {
+    return false;
+  }
+
+  try {
+    const decoded = decodePaymentRequest(trimmed);
+    // Check if it has a nostr transport
+    const nostrTransport = decoded.transport?.find(
+      (t) => t.type === PaymentRequestTransportType.NOSTR
+    );
+    return !!nostrTransport;
+  } catch {
+    return false;
+  }
+};
+```
+
+**Request Processing** (`hooks/coco/useProcessPaymentString.ts:216-331`):
+
+Payment requests support flexible routing based on specified mints and amounts:
+
+| Mints | Amount | Valid Mints | Flow |
+|-------|--------|-------------|------|
+| No | No | Any | currency.tsx → PaymentRequestScreen |
+| No | Yes | 1 | PaymentRequestScreen directly |
+| No | Yes | 2+ | mintSelect.tsx → PaymentRequestScreen |
+| Yes | No | 1 | currency.tsx → SendTokenScreen |
+| Yes | No | 2+ | currency.tsx (filtered) → SendTokenScreen |
+| Yes | Yes | 1 | SendTokenScreen (PR mode) |
+| Yes | Yes | 2+ | mintSelect.tsx → SendTokenScreen |
+
+**Mint Validation** (`hooks/coco/useProcessPaymentString.ts:113-133`):
+
+```typescript
+const getValidMints = (allowedMints: string[] | undefined, minAmount: number | undefined) => {
+  return trustedMints.filter((mint) => {
+    const balance = mintBalances[mint.mintUrl] || 0;
+    // If allowedMints specified, mint must be in the list
+    if (allowedMints && allowedMints.length > 0 && !allowedMints.includes(mint.mintUrl)) {
+      return false;
+    }
+    // If minAmount specified, mint must have sufficient balance
+    if (minAmount !== undefined && minAmount > 0 && balance < minAmount) {
+      return false;
+    }
+    // Must have some balance for sending
+    if (balance === 0) {
+      return false;
+    }
+    return true;
+  });
+};
+```
+
+<Note>
+Payment requests are saved to scan history with type `'paymentRequest'` for tracking (`hooks/coco/useProcessPaymentString.ts:218`).
+</Note>
+
+#### NUT-23: Multi-Path Payments
+
+Multi-path payment support enables efficient routing across multiple mints and payment channels.
+
+## P2PK Implementation (NUT-11)
+
+Sovran provides comprehensive P2PK (Pay-to-Public-Key) support for locked ecash tokens:
+
+**Key Management** (`app/settings-pages/keyring.tsx:79-86`):
+- Generate P2PK keys derived from your seed using BIP-39 paths
+- Import existing keys (nsec or raw hex format)
+- QR code display for sharing public keys
+- Quick Access setting for receive screen shortcut (`stores/settingsStore.ts`)
+
+**Receive Flow** (`components/screens/ReceiveScreen.tsx`):
+- Lightning tab for BOLT11 invoices
+- P2PK tab showing your latest locking key
+- Toggle between payment methods
+
+## Token Validation
+
+**Ecash Token Detection** (`helper/coco/utils.ts:55-62`):
+
+```typescript
+export function isValidEcashToken(token: string): boolean {
+  try {
+    getDecodedToken(token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+**Token Processing** (`hooks/coco/useProcessPaymentString.ts:203-213`):
+
+```typescript
+if (isValidEcashToken(scanning.data)) {
+  addScan(scanning.data, scanning.data, 'ecash', source);
+
+  router.navigate({
+    pathname: '/(receive-flow)/receiveToken',
+    params: {
+      receiveHistoryEntry: JSON.stringify(buildReceiveHistoryEntry(scanning.data)),
+    },
+  });
+  return { urInProgress: false };
+}
+```
+
+## Dependencies
+
+Cashu functionality is powered by:
+
+```json
+// package.json
+{
+  "@cashu/cashu-ts": "^3.3.0",
+  "coco-cashu-core": "^1.1.2-rc.47",
+  "coco-cashu-expo-sqlite": "1.1.2-rc.47",
+  "coco-cashu-plugin-npc": "2.3.1",
+  "coco-cashu-react": "1.1.2-rc.47"
+}
+```
+
+<Warning>
+**Import Rule**: Always import Cashu types and functions from `coco-cashu-core`, not directly from `@cashu/cashu-ts`. The coco-cashu ecosystem provides React hooks and SQLite integration specifically designed for Sovran's architecture.
+</Warning>
+
+## Reference Implementation
+
+- **Mint Quote Creation**: `hooks/coco/useLightningOperations.ts:16-32`
+- **Payment String Processing**: `hooks/coco/useProcessPaymentString.ts`
+- **Mint Management**: `hooks/coco/useMintManagement.ts`
+- **History Tracking**: `hooks/coco/useHistoryEntry.ts`
+- **Send Operations**: `hooks/coco/useSendWithHistory.ts`
+- **Melt Operations**: `hooks/coco/useMeltWithHistory.ts`
+
+## Learn More
+
+<CardGroup cols={2}>
+  <Card title="Cashu Protocol" icon="bitcoin" href="https://cashu.space">
+    Official Cashu protocol documentation
+  </Card>
+  <Card title="Lightning Integration" icon="bolt" href="/protocols/lightning-bolts">
+    Learn about BOLT11 invoice support
+  </Card>
+  <Card title="Nostr Transport" icon="rss" href="/protocols/nostr-nips">
+    Discover NIP-17 payment request transport
+  </Card>
+  <Card title="Wallet Recovery" icon="key" href="/protocols/bip-standards">
+    Understand BIP-39/32 seed derivation
+  </Card>
+</CardGroup>

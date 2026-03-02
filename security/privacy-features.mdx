@@ -1,0 +1,418 @@
+---
+title: Privacy Features
+description: Privacy-first architecture in Sovran - local storage, no data collection, and privacy-preserving technologies
+---
+
+Sovran is designed with privacy as a core principle. This page documents the privacy-preserving features and architectural decisions.
+
+## Privacy Principles
+
+<CardGroup cols={2}>
+  <Card title="No Data Collection" icon="eye-slash">
+    Zero analytics, telemetry, or tracking. No user data leaves your device.
+  </Card>
+  <Card title="Local-First Storage" icon="database">
+    All data stored locally on-device. No cloud servers, no remote databases.
+  </Card>
+  <Card title="Privacy-Preserving Ecash" icon="coins">
+    Cashu protocol provides unlinkable, untraceable transactions.
+  </Card>
+  <Card title="Encrypted Messaging" icon="lock">
+    End-to-end encrypted Nostr DMs with forward secrecy (NIP-17).
+  </Card>
+</CardGroup>
+
+## Zero Data Collection
+
+<Info>
+  Sovran collects **zero analytics, telemetry, or user data**. There are no tracking libraries, no crash reporters, no usage statistics.
+</Info>
+
+### What We DON'T Collect
+
+<Warning>No analytics or usage tracking</Warning>
+<Warning>No IP addresses or network metadata</Warning>
+<Warning>No location data (unless you opt-in to local stamps)</Warning>
+<Warning>No personal information</Warning>
+<Warning>No transaction history on remote servers</Warning>
+<Warning>No contact lists or social graphs</Warning>
+<Warning>No crash reports or error logs</Warning>
+
+### Code Verification
+
+You can verify zero tracking by auditing the codebase:
+
+```bash Search for Tracking Libraries
+# No analytics SDKs
+grep -r "analytics" package.json
+grep -r "mixpanel\|amplitude\|segment" .
+
+# No crash reporters
+grep -r "sentry\|bugsnag\|crashlytics" .
+
+# No ad networks
+grep -r "admob\|facebook.*sdk" .
+```
+
+Result: **No tracking dependencies found** ✅
+
+## Local-Only Storage
+
+All user data is stored **exclusively on your device**:
+
+<Tabs>
+  <Tab title="Secure Storage">
+    **expo-secure-store** (iOS Keychain / Android Keystore)
+    
+    Stores:
+    - BIP-39 mnemonic seed phrase
+    - Derived Nostr keys (cached)
+    - Derived Cashu mnemonic (cached)
+    - Migration flags
+    
+    Never synced to cloud, never backed up via iCloud/Google.
+  </Tab>
+  
+  <Tab title="SQLite Database">
+    **expo-sqlite** (local database)
+    
+    Stores:
+    - Transaction history
+    - Mint information and trust list
+    - Ecash proofs (tokens)
+    - Pending operations
+    - Contact information
+    
+    File: `sovran.db` in app's private directory.
+  </Tab>
+  
+  <Tab title="AsyncStorage">
+    **@react-native-async-storage/async-storage**
+    
+    Stores:
+    - App settings (theme, language, currency)
+    - Onboarding state
+    - Terms acceptance timestamp
+    - Feature flags
+    
+    Persisted locally, never transmitted.
+  </Tab>
+  
+  <Tab title="Memory-Only">
+    **Zustand in-memory stores**
+    
+    Stores:
+    - Current passcode (session-only)
+    - Active profile index
+    - UI state (scroll positions, tabs)
+    - Mock mode data (development)
+    
+    Lost when app is closed.
+  </Tab>
+</Tabs>
+
+### No Cloud Backups
+
+<Warning>
+  Sovran **explicitly excludes** sensitive data from cloud backups:
+</Warning>
+
+```typescript iOS Keychain Configuration (helper/secureStorage.ts:11-15)
+const IOS_SECURE_OPTIONS = {
+  requireAuthentication: false,
+  authenticatePrompt: 'Authenticate to access your Sovran wallet',
+  // expo-secure-store defaults to kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+  // This prevents iCloud Keychain sync
+} as const;
+```
+
+- **iOS**: Secure enclave items marked `WhenUnlockedThisDeviceOnly` (no iCloud sync)
+- **Android**: Keystore items are device-specific (no Google backup)
+
+## Privacy-Preserving Ecash (Cashu)
+
+Cashu protocol provides **strong privacy guarantees** similar to physical cash:
+
+### How Cashu Protects Privacy
+
+<AccordionGroup>
+  <Accordion title="Blinded Signatures">
+    When you receive ecash:
+    1. Your wallet generates a random secret
+    2. **Blinds** the secret before sending to mint
+    3. Mint signs the blinded value (can't see original)
+    4. You **unblind** the signature to get valid token
+    
+    **Result**: Mint cannot link the issued token to your identity.
+  </Accordion>
+
+  <Accordion title="Unlinkable Transactions">
+    When you spend ecash:
+    - You reveal the secret (to prove ownership)
+    - Mint verifies signature and burns token
+    - **Mint cannot link** this spend to the original issuance
+    
+    **Result**: No transaction graph, no spending history.
+  </Accordion>
+
+  <Accordion title="Mint-Specific Privacy">
+    Privacy properties:
+    - ✅ Mint cannot track spending patterns
+    - ✅ Mint cannot identify payer/payee
+    - ✅ Amounts are private (encrypted in proofs)
+    - ⚠️ Mint can see total wallet balance changes (not individual transactions)
+    - ⚠️ Different mints can't see each other's transactions
+  </Accordion>
+
+  <Accordion title="No Blockchain">
+    Unlike Bitcoin:
+    - No public transaction ledger
+    - No address reuse tracking
+    - No chain analysis
+    - No UTXO clustering
+    
+    Ecash transactions are **completely off-chain**.
+  </Accordion>
+</AccordionGroup>
+
+<Info>
+  See [Cashu Overview](/cashu/overview) for more on the privacy-preserving ecash protocol.
+</Info>
+
+## Encrypted Nostr Messaging
+
+Direct messages use **end-to-end encryption** with forward secrecy:
+
+### NIP-17 Gift-Wrapped Messages
+
+<CodeGroup>
+```typescript NIP-17 Encryption (hooks/useNostrDirectMessage.ts:5)
+/**
+ * Nostr Direct Messages hook.
+ * Handles DM composition, sending, retrieval, and deletion
+ * via Nostr. Uses gift-wrapped messages (kind 1059) for privacy.
+ */
+```
+
+```typescript Metadata Privacy (utils/nip17.ts:31)
+/** Return a random timestamp within the last 2 days (for metadata privacy). */
+function randomTimeUpTo2DaysInThePast() {
+  const now = Math.floor(Date.now() / 1000);
+  const twoDays = 2 * 24 * 60 * 60;
+  return now - Math.floor(Math.random() * twoDays);
+}
+```
+</CodeGroup>
+
+### Privacy Features
+
+- **NIP-44**: XChaCha20-Poly1305 encryption (forward secrecy)
+- **Gift wrapping**: Sender identity hidden from relay
+- **Random timestamps**: Obfuscates message timing
+- **Seal + Wrap**: Double-layer encryption
+
+<Info>
+  Relays see encrypted blobs only. They cannot read message content, identify sender/receiver, or correlate conversations.
+</Info>
+
+## Optional Location Privacy
+
+Location stamps are **disabled by default** and fully privacy-preserving:
+
+### Location Jittering
+
+<CodeGroup>
+```typescript Location Privacy (utils/locationPrivacy.ts:2-29)
+/**
+ * Location privacy utility.
+ * Jitters GPS coordinates by ±50 meters to prevent exact location tracking.
+ */
+
+export function jitterLocation(lat: number, lon: number): { lat: number; lon: number } {
+  // ±50 meters in degrees (approximately)
+  const latJitter = (Math.random() - 0.5) * 0.0009; // ~50m at equator
+  const lonJitter = (Math.random() - 0.5) * 0.0009;
+
+  return {
+    lat: lat + latJitter,
+    lon: lon + lonJitter,
+  };
+}
+```
+</CodeGroup>
+
+### Location Privacy Guarantees
+
+<Check>Disabled by default (opt-in only)</Check>
+<Check>Coordinates jittered ±50 meters (randomized)</Check>
+<Check>Stored locally only (never transmitted to mints)</Check>
+<Check>Used for transaction notes only (not for tracking)</Check>
+<Check>Can be bulk-deleted from settings</Check>
+
+<Warning>
+  Even with jittering, repeated location stamps can reveal patterns (home, work, etc.). Use sparingly if privacy is critical.
+</Warning>
+
+## App-Level Privacy Controls
+
+### AppGate Architecture
+
+Sovran uses **privacy-first gating** at app launch:
+
+<CodeGroup>
+```tsx AppGate Component (components/blocks/AppGate.tsx:16-42)
+const AppGate: React.FC<AppGateProps> = ({ children }) => {
+  const { isReady, isLoading } = useNostrKeysContext();
+  const isTermsAccepted = useSettingsStore((state) => state.isTermsAccepted());
+  const acceptTerms = useSettingsStore((state) => state.acceptTerms);
+  const hasSeenOnboarding = useSettingsStore((state) => state.hasSeenOnboarding);
+  const completeOnboarding = useSettingsStore((state) => state.completeOnboarding);
+
+  if (!isTermsAccepted) {
+    return (
+      <TermsConditionsScreen
+        onClose={() => {
+          acceptTerms(new Date().toISOString());
+        }}
+      />
+    );
+  }
+
+  if (!hasSeenOnboarding) {
+    return <OnboardingScreen onComplete={completeOnboarding} />;
+  }
+
+  if (isLoading || !isReady) {
+    return null;
+  }
+
+  return <>{children}</>;
+};
+```
+</CodeGroup>
+
+Gate order:
+1. **Terms acceptance** (privacy policy disclosure)
+2. **Onboarding** (optional, privacy education)
+3. **Key initialization** (local key derivation)
+4. **Passcode lock** (optional, device protection)
+
+No data transmitted during any gate.
+
+### Settings Privacy Controls
+
+User-configurable privacy settings:
+
+| Setting | Default | Purpose |
+|---------|---------|----------|
+| **Location Stamps** | OFF | Enable/disable location tagging |
+| **Passcode Lock** | OFF | App access protection |
+| **Quick Access P2PK** | OFF | Show receive pubkey on home screen |
+| **Regenerate P2PK** | ON | New receive key after each payment |
+
+<Info>
+  All settings stored locally in AsyncStorage. No settings are shared with mints, relays, or third parties.
+</Info>
+
+## Privacy Threat Model
+
+### What Sovran Protects Against
+
+<Check>Analytics companies tracking usage</Check>
+<Check>Mint operators tracking spending patterns</Check>
+<Check>Relay operators reading messages</Check>
+<Check>Network observers (ISP, VPN) seeing transaction details</Check>
+<Check>Cloud providers accessing backups</Check>
+<Check>Third-party SDKs collecting telemetry</Check>
+
+### What Sovran Does NOT Protect Against
+
+<Warning>Device-level malware or spyware</Warning>
+<Warning>Compromised mints (can refuse service, but not steal)</Warning>
+<Warning>Network-level correlation (use Tor for network privacy)</Warning>
+<Warning>Physical device access (use passcode + device lock)</Warning>
+<Warning>Social engineering attacks</Warning>
+
+## Privacy Best Practices
+
+<Steps>
+  <Step title="Use Multiple Mints">
+    Spread funds across mints to limit per-mint visibility.
+  </Step>
+  
+  <Step title="Swap Between Mints">
+    Regularly swap tokens between mints to break linkability.
+  </Step>
+  
+  <Step title="Enable Passcode Lock">
+    Protect app access from physical device theft.
+  </Step>
+  
+  <Step title="Minimize Location Stamps">
+    Only enable if absolutely needed; jittering helps but isn't perfect.
+  </Step>
+  
+  <Step title="Use Tor (Advanced)">
+    Route Sovran traffic through Tor for network-level privacy.
+  </Step>
+  
+  <Step title="Regular Key Rotation">
+    Use multiple accounts for different contexts (personal/business).
+  </Step>
+</Steps>
+
+## Privacy Comparison
+
+| Feature | Sovran | Custodial Wallets | Bitcoin On-Chain |
+|---------|---------|-------------------|-------------------|
+| **Data collection** | None | Extensive | None (but public chain) |
+| **Transaction privacy** | High (Cashu) | Low (KYC) | Low (chain analysis) |
+| **Network privacy** | Moderate | Low | Low (IP leakage) |
+| **Message privacy** | High (NIP-17) | N/A | N/A |
+| **Cloud backups** | Disabled | Often enabled | Depends on wallet |
+| **Third-party SDKs** | Zero | Many | Varies |
+
+## Regulatory Considerations
+
+<Warning>
+  Sovran is a **privacy tool**, not an **anonymity tool**. Strong privacy does not guarantee anonymity.
+</Warning>
+
+- Mints may implement KYC/AML (check mint policies)
+- Lightning on-ramps may require identification
+- Legal obligations vary by jurisdiction
+- Users responsible for compliance in their region
+
+<Note>
+  Privacy is a human right. Sovran provides tools; users must understand their local legal context.
+</Note>
+
+## Privacy Audits
+
+Sovran's privacy architecture can be audited:
+
+1. **Source code**: Fully open on GitHub
+2. **Network traffic**: Monitor with tools like mitmproxy
+3. **Local storage**: Inspect with device file explorers
+4. **Dependencies**: Review package.json for tracking libs
+
+<Info>
+  Community-run audits and privacy research are welcomed. Report findings via GitHub Issues.
+</Info>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Security Overview" icon="shield" href="/security/overview">
+    Overall security architecture
+  </Card>
+  <Card title="Cashu Privacy" icon="coins" href="/cashu/overview">
+    Privacy-preserving ecash protocol
+  </Card>
+  <Card title="Nostr Encryption" icon="lock" href="/nostr/direct-messages">
+    End-to-end encrypted messaging
+  </Card>
+  <Card title="Location Stamps" icon="map-pin" href="/advanced/location-stamps">
+    Optional transaction geotagging
+  </Card>
+</CardGroup>

@@ -1,0 +1,590 @@
+---
+title: 'Encrypted Direct Messages (NIP-17)'
+description: 'Implement private peer-to-peer messaging with gift-wrapped encryption'
+---
+
+Sovran uses **NIP-17** (Private Direct Messages) for end-to-end encrypted messaging. This provides significantly better metadata privacy than the legacy NIP-04 standard.
+
+## Why NIP-17?
+
+NIP-17 improves on NIP-04 by:
+
+- **Metadata Privacy**: Random timestamps and throwaway keys hide sender identity
+- **No Plaintext Tags**: Recipient info is encrypted in the seal layer
+- **Self-Copies**: Retrieve your own sent messages from relays
+- **Multiple Recipients**: Support for group messaging (future)
+
+### NIP-04 vs NIP-17 Comparison
+
+| Feature | NIP-04 (Legacy) | NIP-17 (Modern) |
+|---|---|---|
+| Content Encryption | NIP-04 (weak) | NIP-44 (strong) |
+| Sender Visible | ✅ Yes (pubkey in event) | ❌ No (random throwaway key) |
+| Recipient Visible | ✅ Yes (`p` tag) | ❌ No (encrypted in seal) |
+| Timestamp Privacy | ❌ No | ✅ Yes (randomized) |
+| Self-Copy Support | ❌ No | ✅ Yes |
+
+<Warning>
+NIP-04 is deprecated in Sovran. All new messages use NIP-17.
+</Warning>
+
+## Three-Layer Encryption
+
+NIP-17 uses a "gift wrap" protocol with three nested layers:
+
+### 1. Rumor (Kind 14)
+
+The innermost layer containing the actual message. It's **unsigned** and includes:
+
+```typescript
+{
+  kind: 14,
+  content: "Hello, this is a private message",
+  tags: [["p", recipientPubkey]],
+  created_at: 1234567890,
+  pubkey: senderPubkey,
+  id: "...", // Computed hash for integrity
+  // NO SIGNATURE - prevents sender proof
+}
+```
+
+### 2. Seal (Kind 13)
+
+The middle layer that encrypts the rumor with **NIP-44** using the sender's real key:
+
+```typescript
+{
+  kind: 13,
+  content: "<nip44-encrypted rumor>",
+  tags: [], // Always empty per NIP-59
+  created_at: randomTimestamp(),
+  pubkey: senderPubkey,
+  // SIGNED by sender
+}
+```
+
+### 3. Gift Wrap (Kind 1059)
+
+The outermost layer that hides the sender identity:
+
+```typescript
+{
+  kind: 1059,
+  content: "<nip44-encrypted seal>",
+  tags: [["p", recipientPubkey]], // Only recipient visible
+  created_at: randomTimestamp(),
+  pubkey: throwawayRandomKey, // Can't be linked to sender
+  // SIGNED by throwaway key
+}
+```
+
+<Info>
+Only the gift wrap (kind 1059) is published to relays. The seal and rumor are nested inside.
+</Info>
+
+## Implementation
+
+### Building Gift-Wrapped Messages
+
+```typescript
+// utils/nip17.ts
+import { buildGiftWrappedDM } from 'utils/nip17';
+
+const giftWrap = buildGiftWrappedDM({
+  content: 'Hello!',
+  senderPrivateKey: myPrivateKey,
+  recipientPublicKey: theirPubkey,
+});
+
+// Publish to relays
+const wrapEvent = new NDKEvent(ndk);
+wrapEvent.kind = giftWrap.kind;
+wrapEvent.content = giftWrap.content;
+wrapEvent.tags = giftWrap.tags;
+wrapEvent.created_at = giftWrap.created_at;
+wrapEvent.pubkey = giftWrap.pubkey;
+wrapEvent.id = giftWrap.id;
+wrapEvent.sig = giftWrap.sig;
+
+await wrapEvent.publish();
+```
+
+### Building with Self-Copy
+
+To retrieve your own sent messages, create two gift wraps from the same rumor:
+
+```typescript
+import { buildGiftWrappedDMPair } from 'utils/nip17';
+
+const { recipientWrap, senderWrap } = buildGiftWrappedDMPair({
+  content: 'Hello!',
+  senderPrivateKey: myPrivateKey,
+  recipientPublicKey: theirPubkey,
+});
+
+// Publish to recipient
+const recipientEvent = new NDKEvent(ndk);
+Object.assign(recipientEvent, recipientWrap);
+await recipientEvent.publish();
+
+// Publish self-copy
+const senderEvent = new NDKEvent(ndk);
+Object.assign(senderEvent, senderWrap);
+await senderEvent.publish();
+```
+
+<Note>
+Both wraps share the **same rumor** with the recipient's pubkey in the `p` tag. This is per the NIP-17 spec.
+</Note>
+
+### Unwrapping Received Messages
+
+```typescript
+import { unwrapGiftWrap } from 'utils/nip17';
+
+const unwrapped = unwrapGiftWrap(
+  { content: event.content, pubkey: event.pubkey },
+  myPrivateKey
+);
+
+if (unwrapped) {
+  console.log('Message:', unwrapped.content);
+  console.log('From:', unwrapped.senderPubkey);
+  console.log('Recipients:', unwrapped.recipientPubkeys);
+  console.log('Timestamp:', unwrapped.created_at);
+}
+```
+
+## UserMessagesScreen
+
+The main DM interface is implemented in `UserMessagesScreen.tsx`:
+
+```typescript
+// components/screens/UserMessagesScreen.tsx
+import { UserMessagesScreen } from 'components/screens/UserMessagesScreen';
+
+// In your route component:
+export default function UserMessagesRoute() {
+  const { pubkey } = useLocalSearchParams();
+  return <UserMessagesScreen pubkey={pubkey} />;
+}
+```
+
+### Features
+
+- **NIP-17 Subscription**: Listens for kind 1059 events addressed to your pubkey
+- **Automatic Decryption**: Unwraps messages as they arrive
+- **Optimistic Updates**: Shows sent messages immediately
+- **Read Receipts**: Checkmarks for sent/delivered status
+- **Token Detection**: Extracts and displays Cashu tokens inline
+
+### Subscribing to DMs
+
+```typescript
+// Subscribe to gift-wrapped events (kind 1059) addressed to us
+const giftWrapFilters = useMemo(() => {
+  if (!nostrKeys?.pubkey) return null;
+  return [{
+    kinds: [1059 as number],
+    '#p': [nostrKeys.pubkey],
+  }];
+}, [nostrKeys?.pubkey]);
+
+const { events: giftWrapEvents } = useSubscribe({ filters: giftWrapFilters });
+```
+
+### Unwrapping and Filtering
+
+```typescript
+const unwrappedGiftWrapMessages = useMemo(() => {
+  if (!giftWrapEvents?.length || !nostrKeys?.privateKey || !nostrKeys?.pubkey) return [];
+
+  return giftWrapEvents
+    .map((event) => {
+      const unwrapped = unwrapGiftWrap(
+        { content: event.content, pubkey: event.pubkey },
+        nostrKeys.privateKey
+      );
+      if (!unwrapped) return null;
+
+      // Filter: only messages in this conversation (between us and pubkey)
+      const isFromCounterparty =
+        unwrapped.senderPubkey === pubkey &&
+        unwrapped.recipientPubkeys.includes(nostrKeys.pubkey);
+      const isFromMe =
+        unwrapped.senderPubkey === nostrKeys.pubkey &&
+        unwrapped.recipientPubkeys.includes(pubkey);
+
+      if (!isFromCounterparty && !isFromMe) return null;
+
+      return {
+        wrapId: event.id,
+        ...unwrapped,
+      };
+    })
+    .filter((dm): dm is NonNullable<typeof dm> => dm !== null);
+}, [giftWrapEvents, nostrKeys?.privateKey, nostrKeys?.pubkey, pubkey]);
+```
+
+### Sending Messages
+
+```typescript
+const handleNostrDMSend = async (text: string) => {
+  if (!ndk || !nostrKeys?.privateKey || !nostrKeys?.pubkey || !pubkey) {
+    console.error('Missing required data for sending DM');
+    return;
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const tempMessageId = `temp-${timestamp}`;
+
+  // Optimistic update
+  const optimisticMessage = {
+    id: tempMessageId,
+    content: text,
+    sender: 'me' as const,
+    timestamp: formatTimestamp(timestamp),
+    isRead: false,
+    isSending: true,
+    created_at: timestamp,
+    pubkey: nostrKeys.pubkey,
+  };
+  setMessages((prev) => [...prev, optimisticMessage]);
+
+  try {
+    // Build NIP-17 gift-wrapped DM pair
+    const { recipientWrap, senderWrap } = buildGiftWrappedDMPair({
+      content: text,
+      senderPrivateKey: nostrKeys.privateKey,
+      recipientPublicKey: pubkey,
+    });
+
+    // Publish to recipient
+    const wrapEvent = new NDKEvent(ndk);
+    Object.assign(wrapEvent, recipientWrap);
+    await wrapEvent.publish();
+
+    // Publish self-copy
+    const selfWrapEvent = new NDKEvent(ndk);
+    Object.assign(selfWrapEvent, senderWrap);
+    await selfWrapEvent.publish();
+
+    // Update UI
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === tempMessageId
+          ? { ...msg, id: wrapEvent.id, isRead: true, isSending: false }
+          : msg
+      )
+    );
+  } catch (error) {
+    console.error('Failed to send DM:', error);
+    setMessages((prev) => prev.filter((msg) => msg.id !== tempMessageId));
+  }
+};
+```
+
+## useNostrDirectMessage Hook
+
+For sending DMs from anywhere in the app:
+
+```typescript
+import { useNostrDirectMessage } from 'hooks/useNostrDirectMessage';
+
+function SendPaymentRequest() {
+  const { sendDirectMessage, isSending, error } = useNostrDirectMessage();
+
+  const handleSend = async () => {
+    const payload = { type: 'payment-request', amount: 1000 };
+    await sendDirectMessage(
+      nprofile,
+      JSON.stringify(payload),
+      { additionalRelays: ['wss://relay.example.com'] }
+    );
+  };
+
+  return (
+    <Button onPress={handleSend} disabled={isSending}>
+      Send Payment Request
+    </Button>
+  );
+}
+```
+
+### Hook API
+
+```typescript
+interface UseNostrDirectMessageReturn {
+  sendDirectMessage: (
+    nprofile: string,
+    message: string,
+    options?: { additionalRelays?: string[] }
+  ) => Promise<void>;
+  isSending: boolean;
+  error: Error | null;
+}
+```
+
+### Relay Selection
+
+The hook publishes to multiple relays for reliability:
+
+```typescript
+const targetRelays = [
+  ...(profileRelays || FALLBACK_PAYMENT_RELAYS),
+  ...(options?.additionalRelays || FALLBACK_PAYMENT_RELAYS),
+  DEFAULT_PAYMENT_RELAY,
+].filter((relay, index, self) => self.indexOf(relay) === index); // Deduplicate
+```
+
+Default relays:
+
+```typescript
+const DEFAULT_PAYMENT_RELAY = 'wss://relay.vertexlab.io';
+
+const FALLBACK_PAYMENT_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://relay.8333.space/',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+];
+```
+
+## Message Components
+
+### Text Messages
+
+```typescript
+// app/message/components/TextMessage.tsx
+function MessageBubble({ message, isMe, userPicture, userName }) {
+  return (
+    <VStack align={isMe ? 'flex-end' : 'flex-start'}>
+      <HStack>
+        {!isMe && <Avatar picture={userPicture} seed={message.pubkey} />}
+        <View style={{ backgroundColor: isMe ? accentColor : surfaceColor }}>
+          <Text>{message.content}</Text>
+        </View>
+        {isMe && <Avatar seed={message.pubkey} />}
+      </HStack>
+      <HStack>
+        <Text size={12}>{message.timestamp}</Text>
+        {isMe && (
+          message.isSending ? (
+            <Icon name="svg-spinners:90-ring-with-bg" />
+          ) : (
+            <Icon name={message.isRead ? 'ion:checkmark-done' : 'simple-line-icons:check'} />
+          )
+        )}
+      </HStack>
+    </VStack>
+  );
+}
+```
+
+### Cashu Token Messages
+
+Sovran automatically detects and displays Cashu tokens in messages:
+
+```typescript
+// Extract token from message content
+function extractCashuToken(content: string): string | null {
+  const lowerContent = content.toLowerCase();
+  const cashuAIndex = lowerContent.indexOf('cashua');
+  const cashuBIndex = lowerContent.indexOf('cashub');
+
+  let tokenStartIndex = -1;
+  if (cashuAIndex !== -1 && (cashuBIndex === -1 || cashuAIndex < cashuBIndex)) {
+    tokenStartIndex = cashuAIndex;
+  } else if (cashuBIndex !== -1) {
+    tokenStartIndex = cashuBIndex;
+  }
+
+  if (tokenStartIndex === -1) return null;
+
+  const remainingText = content.slice(tokenStartIndex);
+  let token = '';
+  const maxTokenLength = 5000;
+
+  for (let i = 6; i <= Math.min(remainingText.length, maxTokenLength); i++) {
+    const candidate = remainingText.slice(0, i);
+    if (isValidEcashToken(candidate)) {
+      token = candidate;
+    } else if (token) {
+      break;
+    }
+  }
+
+  return token || null;
+}
+```
+
+```typescript
+// Display token as a card
+function CashuTokenBubble({ token, isMe }) {
+  const decoded = getDecodedToken(token);
+  const amount = decoded.proofs.reduce((sum, proof) => sum + proof.amount, 0);
+
+  return (
+    <Pressable onPress={() => router.navigate('/receiveToken', { token })}>
+      <VStack>
+        <Text>{decoded.mint}</Text>
+        <AmountFormatter amount={amount} unit={decoded.unit} />
+        <Button>{isMe ? 'Cancel' : 'Redeem'}</Button>
+      </VStack>
+    </Pressable>
+  );
+}
+```
+
+## NIP-44 Encryption
+
+NIP-17 uses NIP-44 for encryption (not NIP-04):
+
+```typescript
+import { nip44 } from 'nostr-tools';
+
+const conversationKey = nip44.v2.utils.getConversationKey(
+  senderPrivateKey,
+  recipientPublicKey
+);
+
+const encrypted = nip44.v2.encrypt(plaintext, conversationKey);
+const decrypted = nip44.v2.decrypt(encrypted, conversationKey);
+```
+
+**Benefits of NIP-44 over NIP-04**:
+
+- **Authenticated encryption**: Prevents tampering
+- **Nonce handling**: Better randomness management
+- **Standard compliance**: Uses established crypto primitives
+
+## Metadata Privacy
+
+### Random Timestamps
+
+Timestamps are randomized within a 2-day window to prevent timing analysis:
+
+```typescript
+const TWO_DAYS = 2 * 24 * 60 * 60;
+const randomNow = (): number => Math.round(Date.now() / 1000 - Math.random() * TWO_DAYS);
+```
+
+### Throwaway Keys
+
+Each gift wrap uses a fresh random keypair:
+
+```typescript
+import { generateSecretKey, getPublicKey } from 'nostr-tools';
+
+const randomKey = generateSecretKey();
+const randomPubkey = getPublicKey(randomKey);
+
+// Use randomKey to sign the gift wrap
+const giftWrap = finalizeEvent(
+  { kind: 1059, content: encryptedSeal, tags: [['p', recipientPubkey]] },
+  randomKey
+);
+```
+
+Relays and observers see:
+
+- ✅ Recipient pubkey (from `p` tag)
+- ❌ Sender pubkey (hidden by throwaway key)
+- ❌ Message content (encrypted)
+- ❌ Timestamp (randomized)
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always publish self-copies">
+    ```typescript
+    // ✅ Use buildGiftWrappedDMPair for self-copy support
+    const { recipientWrap, senderWrap } = buildGiftWrappedDMPair(...);
+    await recipientWrap.publish();
+    await senderWrap.publish();
+    
+    // ❌ Don't use buildGiftWrappedDM for sent messages
+    const wrap = buildGiftWrappedDM(...); // No self-copy
+    ```
+  </Accordion>
+
+  <Accordion title="Handle decryption failures">
+    ```typescript
+    const unwrapped = unwrapGiftWrap(event, privateKey);
+    if (!unwrapped) {
+      console.warn('Failed to decrypt message');
+      return; // Skip this message
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Filter by conversation">
+    ```typescript
+    const isFromCounterparty =
+      unwrapped.senderPubkey === theirPubkey &&
+      unwrapped.recipientPubkeys.includes(myPubkey);
+    
+    const isFromMe =
+      unwrapped.senderPubkey === myPubkey &&
+      unwrapped.recipientPubkeys.includes(theirPubkey);
+    
+    if (!isFromCounterparty && !isFromMe) return null;
+    ```
+  </Accordion>
+
+  <Accordion title="Deduplicate messages">
+    ```typescript
+    const existingIds = new Set(messages.map((m) => m.id));
+    const uniqueNewMessages = newMessages.filter((m) => !existingIds.has(m.id));
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Migration from NIP-04
+
+Sovran still **reads** legacy NIP-04 DMs but never **sends** them:
+
+```typescript
+// NIP-04 subscription (read-only for backward compatibility)
+const dmFilters = useMemo(() => {
+  if (!nostrKeys?.pubkey) return null;
+  return [
+    { kinds: [EncryptedDirectMessage], authors: [nostrKeys.pubkey], '#p': [pubkey] },
+    { kinds: [EncryptedDirectMessage], '#p': [nostrKeys.pubkey], authors: [pubkey] },
+  ];
+}, [pubkey, nostrKeys?.pubkey]);
+
+const { events: dmEvents } = useSubscribe({ filters: dmFilters });
+
+// Decrypt NIP-04 events
+await Promise.all(dmEvents.map(async (event) => {
+  const counterparty = new NDKUser({ pubkey });
+  const signer = new NDKPrivateKeySigner(nostrKeys.privateKey);
+  await event.decrypt(counterparty, signer);
+  return { content: event.content, ... };
+}));
+```
+
+<Warning>
+NIP-04 reveals sender/recipient pubkeys and timestamps to relays. Only use for reading old messages.
+</Warning>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Identity & Keys" icon="key" href="/nostr/identity">
+    NIP-06 key derivation for message signing
+  </Card>
+  
+  <Card title="Contacts" icon="users" href="/nostr/contacts">
+    Contact lists populated from DM activity
+  </Card>
+  
+  <Card title="User Profiles" icon="user" href="/nostr/user-profiles">
+    Profile metadata for message senders
+  </Card>
+  
+  <Card title="Cashu Tokens" icon="coins" href="/features/ecash-tokens">
+    Sending ecash via direct messages
+  </Card>
+</CardGroup>

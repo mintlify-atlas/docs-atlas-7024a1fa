@@ -1,0 +1,244 @@
+---
+title: 'Nostr Integration Overview'
+description: 'Learn how Sovran uses Nostr for identity, messaging, and social features'
+---
+
+Sovran is built on the Nostr protocol, providing a decentralized identity layer that powers messaging, contacts, reputation, and Lightning payments.
+
+## What is Nostr?
+
+Nostr (Notes and Other Stuff Transmitted by Relays) is a simple, open protocol for creating censorship-resistant social networks and applications. In Sovran, Nostr serves as:
+
+- **Decentralized Identity**: Your Nostr keypair is your identity across the network
+- **Encrypted Messaging**: Private peer-to-peer communication using NIP-17
+- **Contact Discovery**: Find users and mints with Nostr pubkeys
+- **Reputation System**: Network-based trust scoring and follower metrics
+- **Lightning Integration**: Link Lightning addresses to your Nostr identity
+
+## Core Components
+
+### Identity & Keys
+
+Sovran derives Nostr keys from your BIP-39 mnemonic using **NIP-06** (hierarchical deterministic key derivation):
+
+- **Derivation Path**: `m/44'/1237'/<accountIndex>'/0/0`
+- **Multi-Account Support**: Switch between multiple Nostr identities
+- **Secure Storage**: Keys cached in device Keychain/Keystore
+
+```typescript
+import { deriveNostrKeys } from 'helper/keyDerivation';
+
+const { npub, nsec, pubkey, privateKey } = deriveNostrKeys(mnemonic, 0);
+```
+
+<Info>
+Read the [Identity & Key Management](/nostr/identity) guide for full implementation details.
+</Info>
+
+### Direct Messages
+
+Private messaging using **NIP-17** (gift-wrapped direct messages) with NIP-44 encryption:
+
+- **Three-layer encryption**: Rumor → Seal → Gift Wrap
+- **Metadata privacy**: Random timestamps and throwaway keys
+- **Self-copies**: Retrieve your own sent messages
+
+```typescript
+import { buildGiftWrappedDMPair } from 'utils/nip17';
+
+const { recipientWrap, senderWrap } = buildGiftWrappedDMPair({
+  content: 'Hello!',
+  senderPrivateKey: myPrivateKey,
+  recipientPublicKey: theirPubkey,
+});
+```
+
+<Info>
+Learn more about [Encrypted Direct Messages](/nostr/direct-messages).
+</Info>
+
+### Contacts & Social
+
+Nostr-based contact management and social features:
+
+- **Contact Lists**: NIP-02 contact list events (kind 3)
+- **Follow/Unfollow**: Update contact lists with optimistic updates
+- **DM Contacts**: Recent message activity surfaces active contacts
+- **Mint Contacts**: Mints with Nostr pubkeys appear as contacts
+
+<Info>
+See the [Contact System](/nostr/contacts) documentation.
+</Info>
+
+### User Profiles
+
+Rich profile metadata with reputation and social proof:
+
+- **Profile Metadata**: NIP-01 kind 0 events (name, picture, bio, etc.)
+- **Reputation Score**: Network-based trust scoring (0-100)
+- **Follower Metrics**: Following count, follower count, top followers
+- **Verification**: NIP-05 identifier verification
+
+<Info>
+Read the [User Profiles](/nostr/user-profiles) guide.
+</Info>
+
+### Lightning Addresses
+
+Claim human-readable Lightning addresses linked to your Nostr pubkey:
+
+- **Username Claiming**: `username@npubx.cash` or `username@sovran.money`
+- **NIP-98 Authentication**: HTTP auth using signed Nostr events
+- **Availability Checking**: Real-time username validation
+
+<Info>
+Learn about [Lightning Address Claiming](/nostr/lightning-address).
+</Info>
+
+## Architecture
+
+### Relay Infrastructure
+
+Sovran connects to multiple public Nostr relays for redundancy:
+
+```typescript
+// components/ndk.ts
+export const relays = [
+  'wss://relay.vertexlab.io',
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  // ... more relays
+];
+```
+
+### NDK Integration
+
+Sovran uses **@nostr-dev-kit/ndk-mobile** for Nostr operations:
+
+- **Cache Layer**: SQLite-backed event caching per account
+- **Subscription Management**: React hooks for real-time event subscriptions
+- **Signer Integration**: NDKPrivateKeySigner for event signing
+
+```typescript
+import { useNDK, useSubscribe } from '@nostr-dev-kit/ndk-mobile';
+
+const { ndk } = useNDK();
+const { events } = useSubscribe({ filters: [{ kinds: [1], limit: 50 }] });
+```
+
+### Providers
+
+Nostr functionality is exposed via React Context providers:
+
+| Provider | Purpose |
+|---|---|
+| `NostrKeysProvider` | Key derivation, caching, account switching |
+| `NostrNDKProvider` | NDK initialization with signer and cache |
+
+## Event Kinds Used
+
+Sovran implements these NIP event kinds:
+
+| Kind | NIP | Purpose |
+|---|---|---|
+| 0 | NIP-01 | User metadata (profile info) |
+| 3 | NIP-02 | Contact lists (following) |
+| 4 | NIP-04 | Legacy encrypted DMs (deprecated) |
+| 13 | NIP-59 | Seal (encrypted rumor) |
+| 14 | NIP-17 | Private direct message (rumor) |
+| 1059 | NIP-59 | Gift wrap (encrypted seal) |
+| 27235 | NIP-98 | HTTP auth event |
+
+## Security Considerations
+
+### Key Management
+
+- **Never expose nsec**: Private keys stay in secure storage
+- **NIP-06 derivation**: Keys derived from mnemonic, never stored directly
+- **Cache validation**: Cached keys verified with mnemonic hash
+
+### Message Privacy
+
+- **NIP-17 over NIP-04**: Gift-wrapped DMs provide metadata privacy
+- **Random timestamps**: Prevent timing analysis
+- **Throwaway keys**: Gift wrap pubkeys can't be linked to sender
+
+### Authentication
+
+- **NIP-98 HTTP Auth**: Signed events prove pubkey ownership
+- **Relay-specific auth**: Some relays require AUTH events
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always check key availability">
+    ```typescript
+    const { keys } = useNostrKeysContext();
+    
+    if (!keys?.privateKey || !keys?.pubkey) {
+      console.error('Nostr keys not available');
+      return;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use NDK for event publishing">
+    ```typescript
+    const { ndk } = useNDK();
+    
+    const event = new NDKEvent(ndk);
+    event.kind = 1;
+    event.content = 'Hello Nostr!';
+    await event.publish();
+    ```
+  </Accordion>
+
+  <Accordion title="Handle decryption failures gracefully">
+    ```typescript
+    try {
+      const unwrapped = unwrapGiftWrap(wrapEvent, privateKey);
+      if (!unwrapped) {
+        console.warn('Failed to decrypt message');
+        return;
+      }
+    } catch (error) {
+      console.error('Decryption error:', error);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Validate profile metadata">
+    ```typescript
+    const userInfo = metadataEvents?.[0] ? JSON.parse(metadataEvents[0].content) : null;
+    const displayName = userInfo?.display_name || userInfo?.name || fallbackName;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Identity & Keys" icon="key" href="/nostr/identity">
+    Learn about NIP-06 key derivation and secure key management
+  </Card>
+  
+  <Card title="Direct Messages" icon="message" href="/nostr/direct-messages">
+    Implement NIP-17 encrypted peer-to-peer messaging
+  </Card>
+  
+  <Card title="Contacts" icon="users" href="/nostr/contacts">
+    Build contact lists with DM activity and mint contacts
+  </Card>
+  
+  <Card title="User Profiles" icon="user" href="/nostr/user-profiles">
+    Display rich profiles with reputation and followers
+  </Card>
+</CardGroup>
+
+## Resources
+
+- [Nostr Protocol Specification](https://github.com/nostr-protocol/nips)
+- [NIP-06: Key Derivation](https://github.com/nostr-protocol/nips/blob/master/06.md)
+- [NIP-17: Private Direct Messages](https://github.com/nostr-protocol/nips/blob/master/17.md)
+- [NDK Documentation](https://github.com/nostr-dev-kit/ndk)

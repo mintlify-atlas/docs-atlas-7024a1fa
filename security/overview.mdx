@@ -1,0 +1,155 @@
+---
+title: Security & Privacy Overview
+description: Comprehensive security architecture and privacy-first design principles in Sovran
+---
+
+Sovran is built with a security-first architecture that protects your funds and privacy at every layer.
+
+## Core Security Principles
+
+<CardGroup cols={2}>
+  <Card title="Self-Custody" icon="shield-halved">
+    Your keys, your Bitcoin. Sovran never has access to your private keys or funds.
+  </Card>
+  <Card title="Local-First Storage" icon="database">
+    All sensitive data is stored locally on your device using encrypted secure storage.
+  </Card>
+  <Card title="No Data Collection" icon="eye-slash">
+    Sovran collects zero analytics, telemetry, or personal information.
+  </Card>
+  <Card title="Open Source" icon="code">
+    Fully transparent codebase that you can audit and verify.
+  </Card>
+</CardGroup>
+
+## Security Architecture
+
+### Key Management
+
+Sovran uses industry-standard cryptographic derivation paths:
+
+- **BIP-39**: 12-word mnemonic seed phrase
+- **BIP-32**: Hierarchical Deterministic (HD) key derivation
+- **NIP-06**: Nostr key derivation from mnemonic
+- **NUT-13**: Cashu wallet key derivation
+
+<Info>
+  All keys are derived from a single master mnemonic stored in your device's secure enclave (iOS Keychain / Android Keystore).
+</Info>
+
+### Encryption Layers
+
+| Layer | Technology | Purpose |
+|-------|-----------|----------|
+| **Secure Storage** | expo-secure-store | Mnemonic and derived keys |
+| **Passcode Lock** | 4-digit PIN | App access protection |
+| **Nostr Encryption** | NIP-04, NIP-17, NIP-44 | Encrypted direct messages |
+| **Cashu Proofs** | HMAC-SHA256 | Ecash token integrity |
+
+### Privacy Features
+
+<AccordionGroup>
+  <Accordion title="Zero Data Collection">
+    Sovran does not collect, transmit, or store:
+    - Analytics or usage data
+    - IP addresses or location data (unless you enable location stamps)
+    - Personal information
+    - Transaction history on remote servers
+    
+    Everything stays on your device.
+  </Accordion>
+
+  <Accordion title="Local-Only Storage">
+    All wallet data is stored locally using:
+    - **expo-secure-store**: For mnemonics and private keys
+    - **expo-sqlite**: For transaction history and mint data
+    - **AsyncStorage**: For app settings and preferences
+    
+    No cloud backups, no remote databases.
+  </Accordion>
+
+  <Accordion title="Privacy-Preserving Ecash">
+    Cashu tokens provide strong privacy guarantees:
+    - Unlinkable transactions
+    - No transaction graph analysis
+    - Mint cannot track spending patterns
+    - Blinded signatures for anonymity
+  </Accordion>
+
+  <Accordion title="Optional Location Privacy">
+    Location stamps are:
+    - **Disabled by default**
+    - Only stored locally
+    - Use jittered coordinates (±50m randomization)
+    - Never transmitted to mints or third parties
+  </Accordion>
+</AccordionGroup>
+
+## Security Best Practices
+
+<Steps>
+  <Step title="Backup Your Seed Phrase">
+    Write down your 12-word recovery phrase on paper and store it securely offline. This is the only way to recover your wallet.
+  </Step>
+  
+  <Step title="Enable Passcode Lock">
+    Set a 4-digit PIN to protect app access. The passcode is never persisted to disk.
+  </Step>
+  
+  <Step title="Verify Mint Authenticity">
+    Only add mints you trust. Use the Know Your Mint feature to check mint metadata and health.
+  </Step>
+  
+  <Step title="Regular Backups">
+    Periodically verify you still have access to your seed phrase backup.
+  </Step>
+  
+  <Step title="Keep App Updated">
+    Install updates promptly to receive security patches and improvements.
+  </Step>
+</Steps>
+
+<Warning>
+  **Never share your seed phrase** with anyone. Sovran support will never ask for your recovery phrase.
+</Warning>
+
+## Threat Model
+
+### What Sovran Protects Against
+
+<Check>Device loss or theft (with passcode enabled)</Check>
+<Check>Network eavesdropping on Nostr messages (NIP-17 encryption)</Check>
+<Check>Mint tracking of spending patterns (Cashu privacy)</Check>
+<Check>Unauthorized app access (passcode gate)</Check>
+<Check>Key compromise via cloud storage (local-only secure storage)</Check>
+
+### What Sovran Does NOT Protect Against
+
+<Warning>Compromised device or malware</Warning>
+<Warning>Physical access to unlocked device</Warning>
+<Warning>Screen recording or shoulder surfing</Warning>
+<Warning>Malicious mints (always verify mint authenticity)</Warning>
+<Warning>Loss of seed phrase without backup</Warning>
+
+## Security Audits
+
+<Note>
+  Sovran is open source and welcomes security research. Report vulnerabilities responsibly via GitHub Security Advisories.
+</Note>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Wallet Recovery" icon="rotate-left" href="/security/wallet-recovery">
+    Restore your wallet from seed phrase
+  </Card>
+  <Card title="Passcode Lock" icon="lock" href="/security/passcode-lock">
+    Configure 4-digit PIN protection
+  </Card>
+  <Card title="Key Derivation" icon="key" href="/security/key-derivation">
+    Technical details of key management
+  </Card>
+  <Card title="Privacy Features" icon="user-secret" href="/security/privacy-features">
+    Privacy-preserving design patterns
+  </Card>
+</CardGroup>

@@ -1,0 +1,114 @@
+---
+title: Introduction to Sovran
+description: A mobile Bitcoin wallet with Cashu ecash, Lightning payments, Nostr messaging, and NFC support
+---
+
+# Welcome to Sovran
+
+Sovran is a privacy-focused mobile Bitcoin wallet that brings the feel of physical cash to digital payments. Built on Cashu ecash protocol and powered by Nostr, Sovran enables instant Bitcoin transactions with near-zero fees while maintaining your privacy and sovereignty.
+
+<img src="https://sovran.money" alt="Sovran Wallet" />
+
+## What is Sovran?
+
+Sovran combines cutting-edge Bitcoin technologies to create a seamless payment experience:
+
+- **Cashu Ecash**: Send and receive Bitcoin instantly with blind signatures that protect your privacy
+- **Lightning Network**: Lightning invoices and payments with BOLT11 support
+- **Nostr Integration**: Decentralized messaging, contacts, and social features via Nostr protocol
+- **NFC Payments**: Tap-to-pay functionality for contactless Bitcoin transactions
+- **Multi-Mint Support**: Distribute your balance across multiple Cashu mints for security
+
+## Core Features
+
+### Bitcoin That Feels Like Cash
+
+Ecash bearer tokens live on your device like digital cash. Send and receive instantly with near-zero fees. Blind signatures mean mints can't link your transactions.
+
+### Powered by Nostr
+
+Built on Nostr, a decentralized network that can't be shut down or censored. Your identity is derived from your seed using NIP-06, giving you a portable social identity tied to your wallet.
+
+### Privacy by Design
+
+- BIP-39 seed phrase generation and secure storage
+- NIP-06 deterministic key derivation for Nostr identity
+- Encrypted local storage via expo-secure-store
+- No data collection — fully open source
+
+### Multi-Mint Architecture
+
+Choose mints you trust and spread your balance across many for redundancy. Every mint shows its KYM (Know Your Mint) score with audit data from the Cashu Auditor.
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="bolt" href="/quickstart">
+    Get up and running with Sovran in minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Download and install Sovran on iOS or Android
+  </Card>
+  <Card title="Key Features" icon="star" href="/features/wallet">
+    Explore what makes Sovran unique
+  </Card>
+  <Card title="Security" icon="shield" href="/security/overview">
+    Learn about Sovran's security model
+  </Card>
+</CardGroup>
+
+## Protocol Support
+
+Sovran implements industry-standard Bitcoin and Nostr protocols:
+
+**Cashu NUTs**: NUT-00 through NUT-13, NUT-17 (payment requests), NUT-18, NUT-23
+
+**Lightning Network**: BOLT11 invoices for sending and receiving
+
+**Nostr NIPs**: NIP-04, NIP-05, NIP-06, NIP-17 (gift-wrapped DMs), NIP-19, NIP-44, NIP-59
+
+**Bitcoin Standards**: BIP-39 and BIP-32 for hierarchical deterministic wallets
+
+## Technical Architecture
+
+```javascript
+// Tech Stack
+{
+  "frontend": "React Native + Expo",
+  "styling": "Tailwind CSS via Uniwind",
+  "state": "Zustand (migrating from Redux)",
+  "routing": "Expo Router (file-based)",
+  "cashu": "coco-cashu-core/react/expo-sqlite",
+  "nostr": "NDK for decentralized communication",
+  "animations": "Reanimated with hero transitions"
+}
+```
+
+## Why Sovran?
+
+### Instant Payments
+
+Send and receive Bitcoin instantly without waiting for Lightning channel management or blockchain confirmations. Ecash tokens settle immediately.
+
+### Near-Zero Fees
+
+Cashu ecash eliminates the routing fees and minimum payment amounts common with Lightning, making micropayments practical.
+
+### Enhanced Privacy
+
+Blind signatures ensure mints cannot link your sending and receiving transactions. Multi-mint distribution further protects your privacy.
+
+### Open Source
+
+Fully open source and transparent. No venture capital, no data collection, no tracking.
+
+## Community & Support
+
+- **GitHub**: [SovranBitcoin/Sovran](https://github.com/SovranBitcoin/Sovran)
+- **Website**: [https://sovran.money](https://sovran.money)
+- **Twitter**: [@KevinKelbie](https://x.com/KevinKelbie)
+- **Nostr**: Direct messaging via the Nostr protocol
+
+<Note>
+Sovran is privacy-first, non-custodial software. You control your keys and your funds. Always backup your seed phrase securely.
+</Note>

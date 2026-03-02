@@ -1,0 +1,253 @@
+---
+title: Transaction Filters
+description: Filter transactions by currency, type, direction, status, and month
+---
+
+## Overview
+
+Sovran provides comprehensive filtering capabilities to help you find specific transactions quickly. You can filter by currency, payment type, direction, status, and time period.
+
+## Available Filters
+
+### Currency Filter
+
+Filter transactions by their denomination:
+
+- **ALL**: Show all currencies
+- **SAT**: Bitcoin (sats)
+- **USD**: US Dollar
+- **EUR**: Euro
+- **GBP**: British Pound
+
+```typescript components/screens/TransactionsFilterContext.tsx
+interface TransactionsFilterState {
+  currency: string;
+  paymentType: PaymentType;
+  direction: Direction;
+  status: Status;
+  mintUrl: string;
+  selectedMonth: string | null;
+}
+```
+
+### Payment Type Filter
+
+Filter by the payment method used:
+
+- **All**: Show all payment types
+- **Lightning**: Lightning Network payments only
+- **Ecash**: Cashu ecash tokens only
+
+```typescript app/(filter-flow)/filters.tsx
+type PaymentType = 'all' | 'lightning' | 'ecash';
+
+if (type === 'lightning' && historyEntry.type !== 'mint' && historyEntry.type !== 'melt')
+  return false;
+if (type === 'ecash' && historyEntry.type !== 'send' && historyEntry.type !== 'receive')
+  return false;
+```
+
+### Direction Filter
+
+Filter by transaction direction:
+
+- **All**: Show all transactions
+- **Incoming**: Received payments only (mint, receive)
+- **Outgoing**: Sent payments only (send, melt)
+
+```typescript app/(filter-flow)/filters.tsx
+type Direction = 'all' | 'incoming' | 'outgoing';
+
+if (direction === 'incoming' &&
+    historyEntry.type !== 'mint' &&
+    historyEntry.type !== 'receive')
+  return false;
+if (direction === 'outgoing' && 
+    historyEntry.type !== 'send' && 
+    historyEntry.type !== 'melt')
+  return false;
+```
+
+### Status Filter
+
+Filter by transaction status:
+
+- **All**: Show all statuses
+- **Confirmed**: Completed transactions
+- **Pending**: Transactions awaiting completion
+- **Expired**: Transactions that expired without completion
+
+```typescript app/(filter-flow)/filters.tsx
+type Status = 'All' | 'Confirmed' | 'Pending' | 'Expired';
+
+const isPending =
+  (historyEntry.type === 'mint' && historyEntry.state === 'UNPAID') ||
+  (historyEntry.type === 'melt' && historyEntry.state === 'UNPAID') ||
+  (historyEntry.type === 'send' &&
+    (historyEntry.state === 'pending' || historyEntry.state === 'prepared'));
+
+const isExpired =
+  historyEntry.type === 'mint' &&
+  historyEntry.state === 'UNPAID' &&
+  mintHistoryEntryExpired(historyEntry as MintHistoryEntry);
+```
+
+### Mint Filter
+
+Filter transactions by the mint they came from:
+
+- **All Mints**: Show transactions from all mints
+- **Specific Mint**: Show only transactions from a selected mint
+
+```typescript app/(filter-flow)/filters.tsx
+if (mintUrl !== 'all' && historyEntry.mintUrl !== mintUrl) return false;
+```
+
+## Month Selector
+
+The month selector allows you to view transactions from specific time periods.
+
+### Features
+
+- **Automatic Month Detection**: Automatically extracts months from your transaction history
+- **Smart Display**: Shows year when transactions span multiple years
+- **Horizontal Scroll**: Easily navigate through months
+- **Auto-selection**: Automatically selects the most recent month on load
+
+```typescript components/blocks/MonthSelector.tsx
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+function extractMonthsFromHistory(history: HistoryEntry[]): MonthItem[] {
+  const monthsMap = new Map<string, MonthItem>();
+
+  for (const entry of history) {
+    const date = new Date(entry.createdAt);
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+    if (!monthsMap.has(key)) {
+      monthsMap.set(key, {
+        key,
+        label: MONTH_NAMES[month],
+        fullLabel: `${MONTH_NAMES[month]} ${year}`,
+        year,
+        month,
+      });
+    }
+  }
+
+  return Array.from(monthsMap.values()).sort((a, b) => {
+    if (a.year !== b.year) return b.year - a.year;
+    return b.month - a.month;
+  });
+}
+```
+
+### Implementation
+
+```typescript components/blocks/Transactions.tsx
+if (selectedMonth) {
+  const [yearStr, monthStr] = selectedMonth.split('-');
+  const filterYear = parseInt(yearStr, 10);
+  const filterMonthNum = parseInt(monthStr, 10) - 1; // 0-indexed
+  const date = new Date(historyEntry.createdAt);
+  if (date.getFullYear() !== filterYear || date.getMonth() !== filterMonthNum) {
+    return false;
+  }
+}
+```
+
+## Filter Context
+
+The filter state is managed through a React Context that provides filter values and actions:
+
+```typescript components/screens/TransactionsFilterContext.tsx
+interface TransactionsFilterContextValue extends TransactionsFilterState {
+  setCurrency: (currency: string) => void;
+  setPaymentType: (type: PaymentType) => void;
+  setDirection: (dir: Direction) => void;
+  setStatus: (status: Status) => void;
+  setMintUrl: (mintUrl: string) => void;
+  setSelectedMonth: (month: string | null) => void;
+  openFilterSheet: () => void;
+  hasActiveFilters: boolean;
+  activeFilterCount: number;
+}
+```
+
+## Result Count
+
+The filter screen shows a live count of matching transactions:
+
+```typescript app/(filter-flow)/filters.tsx
+const resultCount = useMemo(() => {
+  const filteredTransactions = history.filter((historyEntry: HistoryEntry) => {
+    if (normalizedCurrency !== 'all' && historyEntry.unit !== normalizedCurrency) return false;
+    if (mintUrl !== 'all' && historyEntry.mintUrl !== mintUrl) return false;
+    // ... additional filters
+  });
+
+  return filteredTransactions.length + swapCount;
+}, [currency, direction, history, mintUrl, paymentType, quoteIdToGroup, status, swapGroupsById]);
+```
+
+## Usage Example
+
+To filter your transactions:
+
+1. Open the Transactions screen
+2. Tap the filter icon in the header
+3. Select your desired filters:
+   - Choose a currency
+   - Select payment type (Lightning/Ecash)
+   - Choose direction (Incoming/Outgoing)
+   - Filter by status (Confirmed/Pending/Expired)
+   - Select a specific mint (optional)
+4. Tap "Apply Filters" to see results
+5. Tap "Reset" to clear all filters
+
+## Filter Persistence
+
+Filters are applied through URL parameters, allowing you to:
+
+- Share filtered views
+- Navigate back and maintain filter state
+- Deep link to specific filtered views
+
+```typescript app/(filter-flow)/filters.tsx
+const handleApply = useCallback(() => {
+  router.dismissTo({
+    pathname: '/transactions',
+    params: {
+      filterCurrency: currency.toLowerCase(),
+      filterPaymentType: paymentType,
+      filterDirection: direction,
+      filterStatus: status,
+      filterMintUrl: mintUrl,
+    },
+  });
+}, [currency, paymentType, direction, status, mintUrl]);
+```
+
+## Active Filter Indicator
+
+The UI displays the number of active filters:
+
+```typescript components/screens/TransactionsFilterContext.tsx
+const hasActiveFilters = useMemo(() => {
+  return paymentType !== 'all' || direction !== 'all' || status !== 'All' || mintUrl !== 'all';
+}, [paymentType, direction, status, mintUrl]);
+
+const activeFilterCount = useMemo(() => {
+  let count = 0;
+  if (paymentType !== 'all') count++;
+  if (direction !== 'all') count++;
+  if (status !== 'All') count++;
+  if (mintUrl !== 'all') count++;
+  return count;
+}, [paymentType, direction, status, mintUrl]);
+```

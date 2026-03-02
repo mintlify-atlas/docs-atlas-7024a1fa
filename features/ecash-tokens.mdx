@@ -1,0 +1,421 @@
+---
+title: Ecash Token Functionality
+description: Cashu ecash token operations including send, receive, validation, and token state management
+---
+
+## Overview
+
+Sovran implements the Cashu ecash protocol through the `coco-cashu-core` and `coco-cashu-react` libraries. Ecash tokens are digital bearer instruments that can be sent, received, and validated cryptographically.
+
+## Token Validation
+
+The `helper/coco/utils.ts` module provides token validation utilities:
+
+### Validate Token Format
+
+```typescript
+export function isValidEcashToken(token: string): boolean {
+  try {
+    getDecodedToken(token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+From `helper/coco/utils.ts:55-62`.
+
+### Decode Token
+
+Tokens are decoded using `coco-cashu-core`:
+
+```typescript
+import { getDecodedToken, type ReceiveHistoryEntry } from 'coco-cashu-core';
+
+const decodedToken = getDecodedToken(rawToken);
+// Returns: { proofs, mint, unit, memo }
+```
+
+## Send Operations
+
+The `useSendWithHistory` hook manages ecash token creation:
+
+### Two-Step Send Flow
+
+```typescript
+export function useSendWithHistory() {
+  const manager = useManager();
+  
+  const send = useCallback(
+    async (mintUrl: string, amount: number, opts: SendOptions = {}): Promise<SendResult> => {
+      // Step 1: Prepare send operation
+      const prepared = await manager.send.prepareSend(mintUrl, amount);
+      targetOperationId = prepared.id;
+      preparedOperationId = prepared.id;
+
+      // Step 2: Execute prepared send
+      const { token, operation } = await manager.send.executePreparedSend(prepared.id);
+      
+      // Step 3: Wait for history entry via event
+      const historyEntry = await Promise.race([entryPromise, timeoutPromise]);
+      
+      return { token, historyEntry, operationId: operation.id };
+    },
+    [manager]
+  );
+}
+```
+
+From `hooks/coco/useSendWithHistory.ts:38-113`.
+
+### Automatic Rollback
+
+Failed send operations are automatically rolled back:
+
+```typescript
+try {
+  const prepared = await manager.send.prepareSend(mintUrl, amount);
+  const { token, operation } = await manager.send.executePreparedSend(prepared.id);
+  return { token, historyEntry, operationId: operation.id };
+} catch (e) {
+  // Rollback on failure
+  if (preparedOperationId) {
+    const operation = await manager.send.getOperation(preparedOperationId);
+    if (operation && ['prepared', 'executing', 'pending'].includes(operation.state)) {
+      await manager.send.rollback(preparedOperationId);
+    }
+  }
+  throw err;
+}
+```
+
+From `hooks/coco/useSendWithHistory.ts:114-138`.
+
+## Receive Operations
+
+### Build Receive History Entry
+
+Centralized receive entry construction:
+
+```typescript
+export function buildReceiveHistoryEntry(
+  rawToken: string,
+  unitOverride?: string
+): ReceiveHistoryEntry {
+  const decodedToken = getDecodedToken(rawToken);
+  return {
+    id: `receive-${Date.now()}`,
+    type: 'receive',
+    amount: sumProofAmounts(decodedToken.proofs),
+    unit: unitOverride ?? decodedToken.unit ?? 'sat',
+    mintUrl: decodedToken.mint,
+    createdAt: Date.now(),
+    metadata: { rawToken },
+    token: decodedToken,
+  };
+}
+```
+
+From `helper/coco/utils.ts:334-349`.
+
+### Sum Proof Amounts
+
+Utility to calculate total token value:
+
+```typescript
+function sumProofAmounts(proofs: ReadonlyArray<{ amount: number }>): number {
+  let total = 0;
+  for (const p of proofs) total += p.amount;
+  return total;
+}
+```
+
+From `helper/coco/utils.ts:319-323`.
+
+## Token Processing
+
+The `useProcessPaymentString` hook handles token detection and routing:
+
+### Regular Ecash Tokens
+
+```typescript
+if (isValidEcashToken(scanning.data)) {
+  addScan(scanning.data, scanning.data, 'ecash', source);
+
+  router.navigate({
+    pathname: '/(receive-flow)/receiveToken',
+    params: {
+      receiveHistoryEntry: JSON.stringify(buildReceiveHistoryEntry(scanning.data)),
+    },
+  });
+  return { urInProgress: false };
+}
+```
+
+From `hooks/coco/useProcessPaymentString.ts:203-212`.
+
+### UR-Encoded Tokens
+
+Support for animated QR codes (UR codes):
+
+```typescript
+if (scanning.data.startsWith('ur:')) {
+  const prevPer = urDecoder.getProgress();
+  urDecoder.receivePart(scanning.data);
+  const nextPer = urDecoder.getProgress();
+  onProgress?.(nextPer);
+
+  // Haptic feedback based on progress
+  if (prevPer !== nextPer) {
+    if (nextPer < 0.33) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } else if (nextPer < 0.66) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } else if (nextPer < 1) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  }
+
+  if (urDecoder.isComplete() && urDecoder.isSuccess()) {
+    const ur = urDecoder.resultUR();
+    const decoded = ur.decodeCBOR();
+    const tokenString = new TextDecoder().decode(decoded);
+    
+    router.navigate({
+      pathname: '/(receive-flow)/receiveToken',
+      params: {
+        receiveHistoryEntry: JSON.stringify(buildReceiveHistoryEntry(tokenString)),
+      },
+    });
+
+    setUrDecoder(new URDecoder());
+    return { urInProgress: false };
+  }
+
+  return { urInProgress: true, progress: nextPer };
+}
+```
+
+From `hooks/coco/useProcessPaymentString.ts:153-199`.
+
+## NUT-18 Payment Requests
+
+Support for Nostr-transported payment requests:
+
+### Detection
+
+```typescript
+const isNostrPaymentRequest = (data: string): boolean => {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith('creqA')) {
+    return false;
+  }
+
+  try {
+    const decoded = decodePaymentRequest(trimmed);
+    const nostrTransport = decoded.transport?.find(
+      (t) => t.type === PaymentRequestTransportType.NOSTR
+    );
+    return !!nostrTransport;
+  } catch {
+    return false;
+  }
+};
+```
+
+From `hooks/coco/useProcessPaymentString.ts:29-45`.
+
+### Routing Logic
+
+Payment requests are routed based on available data:
+
+| Mints | Amount | Valid Mints | Flow |
+|-------|--------|-------------|------|
+| No    | No     | Any         | currency.tsx (pick mint + amount) |
+| No    | Yes    | 1           | SendTokenScreen (direct) |
+| No    | Yes    | 2+          | mintSelect.tsx → SendTokenScreen |
+| Yes   | No     | 1+          | currency.tsx (amount only) |
+| Yes   | Yes    | 1           | SendTokenScreen (PR mode, direct) |
+| Yes   | Yes    | 2+          | mintSelect.tsx → SendTokenScreen |
+
+From `hooks/coco/useProcessPaymentString.ts:231-240`.
+
+### Mint Validation
+
+```typescript
+const getValidMints = useCallback(
+  (allowedMints: string[] | undefined, minAmount: number | undefined) => {
+    return trustedMints.filter((mint) => {
+      const balance = mintBalances[mint.mintUrl] || 0;
+      
+      // If allowedMints specified, mint must be in the list
+      if (allowedMints && allowedMints.length > 0 && !allowedMints.includes(mint.mintUrl)) {
+        return false;
+      }
+      
+      // If minAmount specified, mint must have sufficient balance
+      if (minAmount !== undefined && minAmount > 0 && balance < minAmount) {
+        return false;
+      }
+      
+      // Must have some balance for sending
+      if (balance === 0) {
+        return false;
+      }
+      
+      return true;
+    });
+  },
+  [trustedMints, mintBalances]
+);
+```
+
+From `hooks/coco/useProcessPaymentString.ts:113-133`.
+
+## Token Encoding
+
+Tokens can be encoded in multiple versions:
+
+### V4 Encoding (NFC)
+
+```typescript
+import { getEncodedTokenV4 } from '@cashu/cashu-ts';
+
+const encodedToken = getEncodedTokenV4(token);
+// Returns: cashuB... (base64url encoded)
+```
+
+From `hooks/useNfcEcashPayment.tsx:133`.
+
+### Standard Encoding
+
+```typescript
+import { getEncodedToken } from 'coco-cashu-core';
+
+const encodedToken = getEncodedToken(token);
+// Returns: cashuA... (standard encoding)
+```
+
+## Token State Management
+
+### Pending Tokens
+
+Tokens in pending state:
+
+```typescript
+const pendingSends = history.filter(
+  (entry): entry is SendHistoryEntry =>
+    entry.type === 'send' && 
+    (entry.state === 'pending' || entry.state === 'prepared')
+);
+```
+
+### Reserved Proofs
+
+Proofs locked during operations:
+
+```typescript
+const { reservedTotal } = useReservedProofs();
+```
+
+### Recovery Operations
+
+```typescript
+const manager = CocoManager.getInstance();
+
+// Recover pending operations
+await manager.recoverPendingSendOperations();
+await manager.recoverPendingMeltOperations();
+
+// Force free all reserved proofs
+const result = await CocoManager.freeAllReservedProofs();
+// Returns:
+// {
+//   totalReservedProofs,
+//   rolledBackSendOperations,
+//   rolledBackMeltOperations,
+//   releasedOrphanedReservations,
+//   errors
+// }
+```
+
+From `components/blocks/PrimaryBalance.tsx:188-222`.
+
+## Coco-Cashu Integration
+
+### Core Principles
+
+<Warning>
+  Never redefine types from `coco-cashu-core`. Always import from the source library.
+</Warning>
+
+```typescript
+// ✅ Correct
+import type { HistoryEntry, SendHistoryEntry, MeltHistoryEntry } from 'coco-cashu-core';
+import { useManager, useBalanceContext, usePaginatedHistory } from 'coco-cashu-react';
+
+// ❌ Wrong - Don't redefine coco types
+interface MyHistoryEntry { ... }
+```
+
+### Manager Usage
+
+```typescript
+const manager = useManager();
+
+// Send operations
+await manager.send.prepareSend(mintUrl, amount);
+await manager.send.executePreparedSend(operationId);
+await manager.send.rollback(operationId);
+
+// Melt operations
+await manager.melt.createQuote(mintUrl, invoice);
+await manager.melt.executeMelt(quoteId);
+
+// History
+const history = await manager.history.getPaginatedHistory(offset, limit);
+```
+
+### Event Subscription
+
+```typescript
+const unsubscribe = manager.on('history:updated', ({ entry }) => {
+  if (entry.type === 'send') {
+    const sendEntry = entry as SendHistoryEntry;
+    // Handle send entry update
+  }
+});
+
+return () => unsubscribe();
+```
+
+From `hooks/coco/useSendWithHistory.ts:65-73`.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Token Validation" icon="check-circle">
+    Cryptographic validation of ecash tokens before receive
+  </Card>
+  
+  <Card title="Two-Step Send" icon="arrow-right-arrow-left">
+    Prepare and execute pattern with automatic rollback on failure
+  </Card>
+  
+  <Card title="UR Code Support" icon="qrcode">
+    Animated QR codes for large tokens with progress tracking
+  </Card>
+  
+  <Card title="Payment Requests" icon="file-invoice">
+    NUT-18 payment requests with Nostr transport
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Lightning Payments](/features/lightning-payments) - Lightning Network integration
+- [Multi-Account](/features/multi-account) - Account management
+- [NFC Payments](/features/nfc-payments) - NFC token transfers

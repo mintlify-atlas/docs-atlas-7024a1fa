@@ -1,0 +1,497 @@
+---
+title: Nostr NIPs
+description: Supported Nostr Implementation Possibilities (NIPs) in Sovran for decentralized identity and messaging
+---
+
+Sovran implements multiple Nostr NIPs (Nostr Implementation Possibilities) for decentralized identity, encrypted messaging, and social features.
+
+## Supported NIPs
+
+Sovran supports **NIP-04, NIP-05, NIP-06, NIP-17, NIP-19, NIP-44, and NIP-59**.
+
+## NIP-04: Encrypted Direct Messages (Legacy)
+
+Legacy encrypted direct message support using NIP-04 encryption.
+
+<Warning>
+NIP-04 is considered deprecated in favor of NIP-17 (gift-wrapped DMs) for enhanced metadata privacy. Sovran primarily uses NIP-17 for new messages.
+</Warning>
+
+## NIP-05: DNS-Based Verification
+
+NIP-05 provides DNS-based verification for Nostr identities (Lightning addresses).
+
+**User Interface** (`components/blocks/contacts/SearchResult.tsx`):
+- Profile search with NIP-05 validation
+- Search by npub, NIP-05 identifier, or display name
+- Verification badge display
+
+**Search Flow**:
+```
+User Input → NIP-05 Resolver → Profile Validation → Display Results
+```
+
+## NIP-06: Deterministic Key Derivation
+
+NIP-06 enables deterministic key derivation from BIP-39 seed phrases.
+
+**Implementation** (`helper/keyDerivation.ts:14-31`):
+
+```typescript
+import * as nip06 from 'nostr-tools/nip06';
+import { nip19 } from 'nostr-tools';
+
+/**
+ * Derive Nostr keys from a BIP-39 mnemonic using NIP-06.
+ * Path: m/44'/1237'/<accountIndex>'/0/0
+ */
+export function deriveNostrKeys(mnemonic: string, accountIndex: number = 0): DerivedNostrKeys {
+  const { privateKey: sk, publicKey: pk } = nip06.accountFromSeedWords(
+    mnemonic,
+    undefined,
+    accountIndex
+  );
+
+  return {
+    npub: nip19.npubEncode(pk),
+    nsec: nip19.nsecEncode(sk),
+    pubkey: pk,
+    privateKey: sk,
+  };
+}
+```
+
+**Derivation Path**: `m/44'/1237'/<accountIndex>'/0/0`
+
+**Key Types Derived**:
+- `npub`: Bech32-encoded public key (shareable)
+- `nsec`: Bech32-encoded private key (secret)
+- `pubkey`: Hex public key (for protocol usage)
+- `privateKey`: Raw private key bytes (for signing)
+
+**Provider Integration** (`providers/NostrKeysProvider.tsx:243-365`):
+
+The NostrKeysProvider manages key derivation with caching:
+
+```typescript
+// Fast path: Load cached keys from SecureStore
+const [cachedDerived, cachedCashu] = await Promise.all([
+  retrieveDerivedKeys(defaultAccountIndex),
+  retrieveCashuMnemonic(defaultAccountIndex),
+]);
+
+const cacheValid =
+  cachedDerived?.mnemonicHash === mHash && cachedCashu?.mnemonicHash === mHash;
+
+if (cacheValid && cachedDerived && cachedCashu) {
+  // Use cached keys (fast path)
+  defaultKeys = {
+    npub: cachedDerived.npub,
+    nsec: cachedDerived.nsec,
+    pubkey: cachedDerived.pubkey,
+    privateKey: hexToBytes(cachedDerived.privateKeyHex),
+  };
+} else {
+  // Derive from scratch and persist to SecureStore
+  defaultKeys = deriveNostrKeys(mnemonicToUse, defaultAccountIndex);
+  // Cache in background...
+}
+```
+
+**Benefits**:
+- Single seed phrase for both Bitcoin and Nostr
+- Deterministic identity recovery
+- Multi-account support
+- Cross-platform compatibility
+
+## NIP-17: Private Direct Messages
+
+NIP-17 provides gift-wrapped direct messages with enhanced metadata privacy.
+
+**Implementation** (`utils/nip17.ts`):
+
+NIP-17 uses a three-layer gift-wrapping protocol:
+
+1. **Rumor** (kind 14): Unsigned event containing the actual message
+2. **Seal** (kind 13): Encrypts the rumor with NIP-44, signed by sender
+3. **Wrap** (kind 1059): Encrypts the seal with a random throwaway key
+
+### Creating Gift-Wrapped Messages
+
+**Single Recipient** (`utils/nip17.ts:127-151`):
+
+```typescript
+export function buildGiftWrappedDM(params: {
+  content: string;
+  senderPrivateKey: Uint8Array;
+  recipientPublicKey: string;
+  extraTags?: string[][];
+}): VerifiedEvent {
+  const { content, senderPrivateKey, recipientPublicKey, extraTags } = params;
+
+  // 1. Rumor (kind 14 – unsigned)
+  const rumor = createRumor(
+    {
+      kind: 14,
+      content,
+      tags: [['p', recipientPublicKey], ...(extraTags ?? [])],
+    },
+    senderPrivateKey
+  );
+
+  // 2. Seal (kind 13 – signed by sender, encrypted to recipient)
+  const seal = createSeal(rumor, senderPrivateKey, recipientPublicKey);
+
+  // 3. Gift wrap (kind 1059 – signed by random key, encrypted to recipient)
+  return createWrap(seal, recipientPublicKey);
+}
+```
+
+**With Self-Copy** (`utils/nip17.ts:162-190`):
+
+For sender to retrieve their own sent messages:
+
+```typescript
+export function buildGiftWrappedDMPair(params: {
+  content: string;
+  senderPrivateKey: Uint8Array;
+  recipientPublicKey: string;
+  extraTags?: string[][];
+}): { recipientWrap: VerifiedEvent; senderWrap: VerifiedEvent } {
+  // Same rumor for both wraps
+  const rumor = createRumor(
+    {
+      kind: 14,
+      content,
+      tags: [['p', recipientPublicKey], ...(extraTags ?? [])],
+    },
+    senderPrivateKey
+  );
+
+  // 2a. Wrap for recipient
+  const recipientSeal = createSeal(rumor, senderPrivateKey, recipientPublicKey);
+  const recipientWrap = createWrap(recipientSeal, recipientPublicKey);
+
+  // 2b. Wrap for sender (self-copy)
+  const senderSeal = createSeal(rumor, senderPrivateKey, senderPublicKey);
+  const senderWrap = createWrap(senderSeal, senderPublicKey);
+
+  return { recipientWrap, senderWrap };
+}
+```
+
+### Unwrapping Received Messages
+
+**Decryption** (`utils/nip17.ts:221-258`):
+
+```typescript
+export function unwrapGiftWrap(
+  wrapEvent: { content: string; pubkey: string },
+  recipientPrivateKey: Uint8Array
+): UnwrappedDM | null {
+  try {
+    // Layer 1: decrypt the gift wrap → seal
+    const seal = nip44Decrypt(wrapEvent.content, recipientPrivateKey, wrapEvent.pubkey);
+
+    if (seal.kind !== 13) return null;
+
+    // Layer 2: decrypt the seal → rumor
+    const rumor = nip44Decrypt(seal.content, recipientPrivateKey, seal.pubkey);
+
+    // NIP-17: verify that the seal's pubkey matches the rumor's pubkey
+    if (seal.pubkey !== rumor.pubkey) return null;
+
+    return {
+      senderPubkey: seal.pubkey,
+      recipientPubkeys: (rumor.tags || []).filter((t) => t[0] === 'p').map((t) => t[1]),
+      content: rumor.content,
+      created_at: rumor.created_at,
+      kind: rumor.kind,
+      tags: rumor.tags || [],
+    };
+  } catch {
+    return null;
+  }
+}
+```
+
+**Privacy Features**:
+- Random timestamps (within last 2 days) for metadata obfuscation
+- Throwaway keys prevent sender correlation
+- Seal verification ensures message authenticity
+
+### Messaging Interface
+
+**UI Components** (`components/screens/UserMessagesScreen.tsx`):
+- NIP-17 DM conversation screen
+- Send/receive encrypted messages
+- Inline Cashu token messages
+- Inline payment request messages
+
+**Message Sending** (`hooks/useNostrDirectMessage.ts`):
+- NIP-17 DM creation with NIP-44 encryption
+- Gift wrap generation (recipient + sender copy)
+- Relay publishing
+
+## NIP-19: Bech32 Encoding
+
+NIP-19 defines bech32-encoded entities for Nostr.
+
+**Supported Entity Types**:
+- `npub`: Public key (user identity)
+- `nsec`: Private key (secret)
+- `note`: Note ID (event reference)
+- `nprofile`: Profile with relay hints
+- `nevent`: Event with relay hints
+
+**Decoding** (`helper/nostrClient.ts:7-17`):
+
+```typescript
+export function npubToPubkey(npub: string): string {
+  if (!npub) return '';
+
+  if (npub.startsWith('npub')) {
+    const data = nip19.decode(npub);
+    if (data.type === 'npub') {
+      return data.data;
+    }
+  }
+  return npub;
+}
+```
+
+**Safe Parsing** (`helper/nostrClient.ts:19-27`):
+
+```typescript
+export function npubToPubkeySafe(npub: string): string | null {
+  try {
+    const decoded = nip19.decode(npub);
+    return decoded.type === 'npub' ? decoded.data : null;
+  } catch {
+    return null;
+  }
+}
+```
+
+**Payment String Processing** (`hooks/coco/useProcessPaymentString.ts:52-75`):
+
+Sovran handles both `npub1...` and `nostr:npub1...` formats:
+
+```typescript
+const parseNpub = (data: string): string | null => {
+  const trimmed = data.trim();
+
+  // Remove 'nostr:' prefix if present
+  const npubString = trimmed.startsWith('nostr:') ? trimmed.slice(6) : trimmed;
+
+  // Check if it looks like an npub
+  if (!npubString.startsWith('npub1')) {
+    return null;
+  }
+
+  // Validate by attempting to decode
+  try {
+    const decoded = nip19.decode(npubString);
+    if (decoded.type === 'npub') {
+      return npubString;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
+```
+
+**Profile Navigation** (`hooks/coco/useProcessPaymentString.ts:387-398`):
+
+Scanning an npub navigates to the user's profile:
+
+```typescript
+const validNpub = parseNpub(scanning.data);
+if (validNpub) {
+  // Store the scan in history
+  addScan(scanning.data, validNpub, 'npub', source);
+
+  router.navigate({
+    pathname: '/(user-flow)/profile',
+    params: {
+      npub: validNpub,
+    },
+  });
+}
+```
+
+## NIP-44: Encrypted Payloads
+
+NIP-44 provides versioned encryption for Nostr messages (improved NIP-04).
+
+**Implementation** (`utils/nip17.ts:34-44`):
+
+```typescript
+import { nip44 } from 'nostr-tools';
+
+/** Derive a NIP-44 conversation key from a private key and a public key. */
+const nip44ConversationKey = (privateKey: Uint8Array, publicKey: string) =>
+  nip44.v2.utils.getConversationKey(privateKey, publicKey);
+
+/** NIP-44-encrypt any JSON-serialisable data. */
+const nip44Encrypt = (data: object, privateKey: Uint8Array, publicKey: string): string =>
+  nip44.v2.encrypt(JSON.stringify(data), nip44ConversationKey(privateKey, publicKey));
+
+/** NIP-44-decrypt a ciphertext and return the parsed JSON. */
+const nip44Decrypt = (ciphertext: string, privateKey: Uint8Array, peerPublicKey: string): unknown =>
+  JSON.parse(nip44.v2.decrypt(ciphertext, nip44ConversationKey(privateKey, peerPublicKey)));
+```
+
+**Usage in NIP-17**:
+- Encrypts rumor in seal (kind 13)
+- Encrypts seal in gift wrap (kind 1059)
+- Uses conversation keys for sender/recipient pairs
+
+**Security Properties**:
+- Forward secrecy (each message uses unique keys)
+- Authentication (verifiable sender identity)
+- Confidentiality (only recipient can decrypt)
+
+## NIP-59: Gift Wrap
+
+NIP-59 defines the gift wrap protocol structure used by NIP-17.
+
+**Event Kinds**:
+- **Kind 13**: Seal (encrypted rumor)
+- **Kind 1059**: Gift wrap (encrypted seal)
+
+**Rumor Creation** (`utils/nip17.ts:56-70`):
+
+```typescript
+function createRumor(
+  event: { kind: number; content: string; tags?: string[][]; created_at?: number },
+  senderPrivateKey: Uint8Array
+): Rumor {
+  const rumor: Record<string, unknown> = {
+    created_at: now(),
+    tags: [],
+    ...event,
+    pubkey: getPublicKey(senderPrivateKey),
+  };
+
+  rumor.id = getEventHash(rumor as UnsignedEvent);
+
+  return rumor as unknown as Rumor;
+}
+```
+
+**Seal Creation** (`utils/nip17.ts:78-93`):
+
+```typescript
+function createSeal(
+  rumor: Rumor,
+  senderPrivateKey: Uint8Array,
+  recipientPublicKey: string
+): VerifiedEvent {
+  return finalizeEvent(
+    {
+      kind: 13,
+      content: nip44Encrypt(rumor, senderPrivateKey, recipientPublicKey),
+      created_at: randomNow(), // Random timestamp for privacy
+      tags: [],
+    },
+    senderPrivateKey
+  ) as VerifiedEvent;
+}
+```
+
+**Gift Wrap Creation** (`utils/nip17.ts:101-114`):
+
+```typescript
+function createWrap(seal: VerifiedEvent, recipientPublicKey: string): VerifiedEvent {
+  const randomKey = generateSecretKey();
+
+  return finalizeEvent(
+    {
+      kind: 1059,
+      content: nip44Encrypt(seal, randomKey, recipientPublicKey),
+      created_at: randomNow(), // Random timestamp
+      tags: [['p', recipientPublicKey]], // Only reveals recipient
+    },
+    randomKey // Signed with throwaway key
+  ) as VerifiedEvent;
+}
+```
+
+## Social Features
+
+### User Profiles
+
+**Profile Viewer** (`app/(user-flow)/profile.tsx`):
+- Banner and avatar display
+- Follower/following counts
+- Top followers (social proof)
+- Reputation score
+- Follow/unfollow actions
+
+**Profile Fetching** (`hooks/useNostrProfile.ts`):
+- Profile metadata (kind 0)
+- Follower/following counts
+- Top followers list
+- User ranking
+
+### Mint Recommendations
+
+**Kind 38000**: Cashu mint recommendation events
+
+**Validation** (`helper/nostrClient.ts:64-67`):
+
+```typescript
+export function isCashuRecommendationEvent(e: NostrEvent): boolean {
+  const kindTag = e.tags.find((t) => t[0] === 'k');
+  return Boolean(kindTag && kindTag[1] === '38172');
+}
+```
+
+**Mint Discovery** (`hooks/coco/useNostrDiscoveredMints.ts`):
+- Discovers mints from Nostr kind 38000 events
+- Filters by k tag (38172 = Cashu mint)
+- Extracts mint URLs from u tags
+
+## Dependencies
+
+```json
+// package.json:56,113
+{
+  "@nostr-dev-kit/ndk-mobile": "^0.2.2",
+  "nostr-tools": "^2.10.4"
+}
+```
+
+<Info>
+Sovran uses `nostr-tools` for core Nostr operations and `@nostr-dev-kit/ndk-mobile` for mobile-optimized Nostr features including relay pool management.
+</Info>
+
+## Reference Implementation
+
+- **NIP-06 Derivation**: `helper/keyDerivation.ts:14-31`
+- **NIP-17 Gift Wrap**: `utils/nip17.ts`
+- **NIP-19 Decoding**: `helper/nostrClient.ts:7-27`
+- **NIP-44 Encryption**: `utils/nip17.ts:34-44`
+- **Nostr Keys Provider**: `providers/NostrKeysProvider.tsx`
+- **Direct Messaging**: `hooks/useNostrDirectMessage.ts`
+- **Profile Management**: `hooks/useNostrProfile.ts`
+
+## Learn More
+
+<CardGroup cols={2}>
+  <Card title="BIP Standards" icon="key" href="/protocols/bip-standards">
+    Learn about BIP-39 seed phrase derivation
+  </Card>
+  <Card title="Payment Requests" icon="paper-plane" href="/protocols/cashu-nuts#nut-18-payment-requests">
+    NUT-18 Nostr-based payment requests
+  </Card>
+  <Card title="Nostr Protocol" icon="rss" href="https://github.com/nostr-protocol/nips">
+    Official Nostr NIPs repository
+  </Card>
+  <Card title="Security" icon="shield" href="/protocols/bip-standards#secure-storage">
+    Secure key storage with expo-secure-store
+  </Card>
+</CardGroup>

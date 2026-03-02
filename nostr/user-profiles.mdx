@@ -1,0 +1,671 @@
+---
+title: 'User Profiles & Reputation'
+description: 'Rich profile metadata with followers, reputation scores, and social proof'
+---
+
+Sovran displays rich user profiles with social metadata from the Nostr network and Sovran's reputation API.
+
+## Profile Metadata (NIP-01)
+
+Profiles are stored as **kind 0** events with JSON content:
+
+```typescript
+{
+  kind: 0,
+  content: JSON.stringify({
+    name: "alice",
+    display_name: "Alice Smith",
+    about: "Bitcoin maximalist and Nostr enthusiast",
+    picture: "https://example.com/avatar.jpg",
+    banner: "https://example.com/banner.jpg",
+    website: "https://alice.com",
+    nip05: "alice@example.com",
+    lud16: "alice@getalby.com",
+  }),
+  created_at: 1234567890,
+  pubkey: "...",
+}
+```
+
+### Standard Fields
+
+| Field | Description |
+|---|---|
+| `name` | Short handle (e.g., "alice") |
+| `display_name` | Full name (e.g., "Alice Smith") |
+| `about` | Bio/description |
+| `picture` | Avatar image URL |
+| `banner` | Banner/header image URL |
+| `website` | Personal website |
+| `nip05` | NIP-05 identifier (verified DNS-based identity) |
+| `lud16` | Lightning address (LNURL-pay) |
+| `lud06` | Legacy LNURL-pay |
+
+## Profile Screen
+
+The main profile UI is in `app/(user-flow)/profile.tsx`:
+
+```typescript
+// app/(user-flow)/profile.tsx
+import { router, useLocalSearchParams } from 'expo-router';
+import { npubToPubkey } from 'helper/nostrClient';
+
+export default function UserProfileScreen() {
+  const { npub, pubkey: pubkeyParam } = useLocalSearchParams();
+  
+  const pubkey = useMemo(() => {
+    if (pubkeyParam) return pubkeyParam;
+    if (npub) return npubToPubkey(npub);
+    return '';
+  }, [npub, pubkeyParam]);
+
+  // Subscribe to profile metadata
+  const metadataFilters = useMemo(
+    () => (pubkey ? [{ authors: [pubkey], kinds: [Metadata], limit: 1 }] : null),
+    [pubkey]
+  );
+  const { events: metadataEvents, eose: metadataEose } = useSubscribe({ filters: metadataFilters });
+
+  const userInfo = useMemo(() => {
+    if (!metadataEvents?.[0]) return null;
+    try {
+      return JSON.parse(metadataEvents[0].content);
+    } catch {
+      return null;
+    }
+  }, [metadataEvents]);
+
+  return (
+    <UserFeed
+      pubkey={pubkey}
+      authorName={displayName}
+      authorPicture={userInfo?.picture}
+      ListHeaderComponent={
+        <View>
+          <BannerWithAvatar
+            bannerUrl={userInfo?.banner}
+            pictureUrl={userInfo?.picture}
+            pubkey={pubkey}
+            displayName={displayName}
+            nip05={userInfo?.nip05}
+          />
+          <ProfileStatsGrid
+            followingCount={followingCount}
+            followerCount={followerCount}
+            reputationScore={reputationScore}
+            joinedDate={joinedDate}
+          />
+          <TopFollowers topFollowers={profileData?.topFollowers || []} />
+          {userInfo?.about && <Card variant="info" message={userInfo.about} />}
+        </View>
+      }
+    />
+  );
+}
+```
+
+## Banner & Avatar
+
+The profile header displays:
+
+- **Banner image**: Full-width background (150px height)
+- **Overlapping avatar**: 90px circle with 4px border
+- **Display name**: From `display_name` or `name`
+- **NIP-05**: Verified identifier with checkmark
+- **Follow button**: For non-own profiles
+
+```typescript
+function BannerWithAvatar({
+  bannerUrl,
+  pictureUrl,
+  pubkey,
+  displayName,
+  nip05,
+  isLoading,
+  showFollowButton,
+  isFollowing,
+  onToggleFollow,
+}) {
+  const bannerGradientTheme = useMemo(
+    () => generateSeededGradient(`${pubkey}:person`, 'person'),
+    [pubkey]
+  );
+
+  return (
+    <View>
+      {/* Banner with gradient fallback */}
+      <View style={{ height: BANNER_HEIGHT }}>
+        <LinearGradient colors={bannerGradientTheme.primaryColors} />
+        {bannerUrl && <ExpoImage source={{ uri: bannerUrl }} />}
+      </View>
+
+      {/* Overlapping avatar */}
+      <View style={{ marginTop: -(AVATAR_SIZE - AVATAR_OVERLAP) }}>
+        <View style={{ borderWidth: 4, borderColor: background }}>
+          <Avatar picture={pictureUrl} seed={pubkey} size={AVATAR_SIZE} />
+        </View>
+      </View>
+
+      {/* Name & NIP-05 */}
+      <VStack align="center">
+        <Text bold size={22}>{displayName}</Text>
+        {nip05 && (
+          <HStack>
+            <Icon name="mdi:check-decagram" size={16} />
+            <Text size={14}>{nip05}</Text>
+          </HStack>
+        )}
+        {showFollowButton && (
+          <TouchableOpacity onPress={onToggleFollow}>
+            <Text>{isFollowing ? 'Following' : 'Follow'}</Text>
+          </TouchableOpacity>
+        )}
+      </VStack>
+    </View>
+  );
+}
+```
+
+## Profile Stats Grid
+
+Displays a 2x2 grid of key metrics:
+
+```typescript
+function ProfileStatsGrid({
+  followingCount,
+  followerCount,
+  reputationScore,
+  joinedDate,
+  isLoading,
+}) {
+  const stats = [
+    {
+      label: 'Following',
+      description: 'Users followed',
+      value: followingCount?.toString() ?? '0',
+    },
+    {
+      label: 'Followers',
+      description: 'Total count',
+      value: followerCount?.toString() ?? '0',
+    },
+    {
+      label: 'Reputation',
+      description: 'Network score',
+      value: reputationScore !== undefined ? `${Math.round(reputationScore)} / 100` : 'N/A',
+    },
+    {
+      label: 'Joined',
+      description: 'Account created',
+      value: joinedDate || 'Unknown',
+    },
+  ];
+
+  return (
+    <View style={styles.statsGrid}>
+      <View style={styles.statsRow}>
+        {stats.slice(0, 2).map((stat) => (
+          <View key={stat.label} style={styles.statCard}>
+            <Text bold size={12}>{stat.label.toUpperCase()}</Text>
+            <Text bold size={20}>{stat.value}</Text>
+            <Text size={12}>{stat.description}</Text>
+          </View>
+        ))}
+      </View>
+      <View style={styles.statsRow}>
+        {stats.slice(2, 4).map((stat) => (
+          <View key={stat.label} style={styles.statCard}>
+            <Text bold size={12}>{stat.label.toUpperCase()}</Text>
+            <Text bold size={16}>{stat.value}</Text>
+            <Text size={12}>{stat.description}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+```
+
+## Reputation System
+
+Sovran uses the **Sovran API** to fetch reputation scores:
+
+```typescript
+// helper/apiClient.ts
+export interface NostrProfileResponse {
+  pubkey: string;
+  npub: string;
+  rank: number;
+  followers: number;
+  follows: number;
+  score: number;        // 0-100 reputation score
+  topFollowers: TopFollower[];
+  created_at: number;
+  fromCache: boolean;
+  mintUrl?: string;     // If user operates a mint
+}
+
+export const fetchNostrProfile = (pubkey: string) =>
+  safeFetch<NostrProfileResponse>(`${BASE_URL}/nostr/profile?pubkey=${pubkey}`);
+```
+
+### useNostrProfile Hook
+
+```typescript
+// hooks/useNostrProfile.ts
+import { fetchNostrProfile, type NostrProfileResponse } from '@/helper/apiClient';
+
+export function useNostrProfile(pubkey: string | null): UseNostrProfileResult {
+  const [data, setData] = useState<NostrProfileResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const fetchProfile = useCallback(async () => {
+    if (!pubkey) {
+      setData(null);
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    const result = await fetchNostrProfile(pubkey);
+    if (result.isOk()) {
+      setData(result.value);
+    } else {
+      setError(result.error);
+      setData(null);
+    }
+    setIsLoading(false);
+  }, [pubkey]);
+
+  useEffect(() => {
+    fetchProfile();
+  }, [fetchProfile]);
+
+  return { data, isLoading, error, refetch: fetchProfile };
+}
+```
+
+### Reputation Score Calculation
+
+The API computes reputation based on:
+
+- **Follower count**: Number of followers
+- **Follower quality**: Weighted by follower reputation
+- **Network position**: Centrality in follow graph
+- **Content engagement**: Likes, replies, reposts
+- **Account age**: Older accounts score higher
+
+<Note>
+The exact algorithm is proprietary but follows standard social graph analysis.
+</Note>
+
+## Top Followers
+
+Displays the 6 most influential followers:
+
+```typescript
+export interface TopFollower {
+  pubkey: string;
+  npub: string;
+  rank: number;
+  name?: string;
+  displayName?: string;
+  picture?: string;
+  image?: string;
+  banner?: string;
+  about?: string;
+  nip05?: string;
+  nip05Valid?: boolean;
+  website?: string;
+  lud16?: string;
+}
+
+function TopFollowers({ topFollowers, isLoading }) {
+  const followersWithProfiles = useMemo(
+    () => getFollowersWithProfiles(topFollowers).slice(0, 6),
+    [topFollowers]
+  );
+
+  return (
+    <View>
+      <Text bold size={12}>TOP FOLLOWERS</Text>
+      <View style={styles.topFollowersGrid}>
+        {followersWithProfiles.map((follower) => (
+          <TouchableOpacity
+            key={follower.pubkey}
+            onPress={() => router.navigate('/profile', { npub: follower.npub })}>
+            <Avatar
+              picture={getFollowerPicture(follower)}
+              seed={follower.pubkey}
+              size={avatarSize}
+            />
+            <Text size={11} numberOfLines={1}>
+              {getFollowerDisplayName(follower)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+```
+
+### Helper Functions
+
+```typescript
+// hooks/useNostrProfile.ts
+export function getFollowersWithProfiles(topFollowers: TopFollower[]): TopFollower[] {
+  return topFollowers.filter((f) => f.name || f.displayName || f.picture || f.image);
+}
+
+export function getFollowerDisplayName(follower: TopFollower): string {
+  return follower.displayName || follower.name || follower.npub.slice(0, 12) + '...';
+}
+
+export function getFollowerPicture(follower: TopFollower): string | undefined {
+  return follower.picture || follower.image;
+}
+```
+
+## Follow/Unfollow
+
+Following is implemented via **NIP-02 contact lists** (kind 3):
+
+```typescript
+const handleToggleFollow = useCallback(async () => {
+  if (!pubkey || !nostrKeys?.pubkey || !ndk) {
+    engagementUpdateFailedPopup('follow');
+    return;
+  }
+  if (nostrKeys.pubkey === pubkey || followInFlight) return;
+
+  const shouldFollow = !isFollowingProfile;
+  setFollowOptimistic(pubkey, shouldFollow, true);
+
+  const nextTags = buildUpdatedContactTags(contactsTags, pubkey, shouldFollow);
+  const createdAt = Math.floor(Date.now() / 1000);
+
+  try {
+    const contactEvent = new NDKEvent(ndk);
+    contactEvent.kind = Contacts;
+    contactEvent.tags = nextTags;
+    contactEvent.content = contactsContent;
+    contactEvent.created_at = createdAt;
+    await contactEvent.publish();
+    setContactsFromRelay({ tags: nextTags, content: contactsContent, createdAt });
+    clearFollowOptimistic(pubkey);
+  } catch {
+    clearFollowOptimistic(pubkey);
+    engagementUpdateFailedPopup('follow');
+  }
+}, [pubkey, nostrKeys?.pubkey, ndk, isFollowingProfile, contactsTags, contactsContent]);
+```
+
+### Building Updated Contact Tags
+
+```typescript
+function buildUpdatedContactTags(
+  existingTags: string[][],
+  targetPubkey: string,
+  shouldFollow: boolean
+): string[][] {
+  // Remove existing entry for this pubkey
+  const nextTags = existingTags.filter((tag) => !(tag[0] === 'p' && tag[1] === targetPubkey));
+  
+  // Add back if following
+  if (shouldFollow) {
+    nextTags.push(['p', targetPubkey]);
+  }
+  
+  // Deduplicate
+  const seenP = new Set<string>();
+  const deduped: string[][] = [];
+  for (const tag of nextTags) {
+    if (tag[0] !== 'p') {
+      deduped.push(tag);
+      continue;
+    }
+    const pk = tag[1];
+    if (!pk || seenP.has(pk)) continue;
+    seenP.add(pk);
+    deduped.push(tag);
+  }
+  return deduped;
+}
+```
+
+### Optimistic Updates
+
+Follow/unfollow uses optimistic UI updates:
+
+```typescript
+// stores/nostrSocialStore.ts
+interface NostrSocialState {
+  followingPubkeys: Record<string, boolean>;
+  optimisticFollowsByPubkey: Record<string, { value: boolean; pending: boolean }>;
+  setFollowOptimistic: (pubkey: string, value: boolean, pending: boolean) => void;
+  clearFollowOptimistic: (pubkey: string) => void;
+}
+
+export const useNostrSocialStore = create<NostrSocialState>((set) => ({
+  followingPubkeys: {},
+  optimisticFollowsByPubkey: {},
+  setFollowOptimistic: (pubkey, value, pending) =>
+    set((state) => ({
+      optimisticFollowsByPubkey: {
+        ...state.optimisticFollowsByPubkey,
+        [pubkey]: { value, pending },
+      },
+    })),
+  clearFollowOptimistic: (pubkey) =>
+    set((state) => {
+      const next = { ...state.optimisticFollowsByPubkey };
+      delete next[pubkey];
+      return { optimisticFollowsByPubkey: next };
+    }),
+}));
+```
+
+## Profile Info Section
+
+Displays copyable/clickable profile fields:
+
+```typescript
+const profileInfoItems = useMemo(() => {
+  const items: {
+    key: string;
+    prefix: React.ReactNode;
+    title: string;
+    suffixIcon: string;
+    onPress: () => void;
+  }[] = [
+    {
+      key: 'npub',
+      prefix: <CurrencyIcon colors={[iconColor]} width={20} currency="nostr" />,
+      title: truncateMiddle(npub, 10),
+      suffixIcon: 'lets-icons:copy',
+      onPress: () => handleCopy(npub, 'npub'),
+    },
+  ];
+
+  if (userInfo?.nip05) {
+    items.push({
+      key: 'nip05',
+      prefix: <Icon name="mdi:check-decagram" size={20} />,
+      title: userInfo.nip05,
+      suffixIcon: 'lets-icons:copy',
+      onPress: () => handleCopy(userInfo.nip05, 'nip05'),
+    });
+  }
+
+  if (userInfo?.lud16) {
+    items.push({
+      key: 'lud16',
+      prefix: <Icon name="mdi:lightning-bolt" size={20} />,
+      title: userInfo.lud16,
+      suffixIcon: 'lets-icons:copy',
+      onPress: () => handleCopy(userInfo.lud16, 'lud16'),
+    });
+  }
+
+  if (userInfo?.website) {
+    items.push({
+      key: 'website',
+      prefix: <Icon name="mdi:web" size={20} />,
+      title: userInfo.website,
+      suffixIcon: 'mdi:open-in-new',
+      onPress: () => handleOpenLink(userInfo.website),
+    });
+  }
+
+  return items;
+}, [npub, userInfo, handleCopy, handleOpenLink]);
+
+return (
+  <ListGroup variant="secondary">
+    {profileInfoItems.map((item) => (
+      <PressableFeedback key={item.key} onPress={item.onPress}>
+        <ListGroup.Item>
+          <ListGroup.ItemPrefix>{item.prefix}</ListGroup.ItemPrefix>
+          <ListGroup.ItemContent>
+            <ListGroup.ItemTitle>{item.title}</ListGroup.ItemTitle>
+          </ListGroup.ItemContent>
+          <ListGroup.ItemSuffix>
+            <Icon name={item.suffixIcon} size={20} />
+          </ListGroup.ItemSuffix>
+        </ListGroup.Item>
+      </PressableFeedback>
+    ))}
+  </ListGroup>
+);
+```
+
+## QR Code Sharing
+
+Profiles can be shared via QR code:
+
+```typescript
+// Header right button
+<Link
+  href={{
+    pathname: '/(user-flow)/share',
+    params: {
+      type: 'npub',
+      data: npub,
+      ...(userInfo?.lud16 && { lud16: userInfo.lud16 }),
+    },
+  }}
+  asChild>
+  <TouchableOpacity>
+    <Icon name="mdi:qrcode" size={24} />
+  </TouchableOpacity>
+</Link>
+```
+
+The share screen displays:
+
+- **QR code**: Encoded npub or nprofile
+- **Lightning address**: If available
+- **Profile card**: Name, picture, NIP-05
+- **Share button**: Export to system share sheet
+
+## User Feed
+
+Profiles include a feed of recent notes (kind 1 events):
+
+```typescript
+import { UserFeed } from 'components/blocks/UserFeed';
+
+<UserFeed
+  pubkey={pubkey}
+  authorName={displayName}
+  authorPicture={userInfo?.picture}
+  isOwnProfile={isOwnProfile}
+  onVideoPostsReady={handleVideoPostsReady}
+  ListHeaderComponent={<ProfileHeader />}
+/>
+```
+
+The feed includes:
+
+- **Text notes**: Standard short-form posts
+- **Replies**: Threaded conversations
+- **Reposts**: Quoted or boosted notes
+- **Reactions**: Likes and custom emoji reactions
+
+<Note>
+Video posts are used to populate the Stories feature.
+</Note>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Fallback for missing profile data">
+    ```typescript
+    const displayName = userInfo?.display_name || userInfo?.name || truncateMiddle(npub, 8);
+    const picture = userInfo?.picture || undefined; // Triggers gradient
+    const banner = userInfo?.banner || undefined;   // Triggers gradient
+    ```
+  </Accordion>
+
+  <Accordion title="Cache profile images">
+    ```typescript
+    import { prefetchImages } from '@/helper/imageCache';
+    
+    useEffect(() => {
+      if (userInfo?.picture) prefetchImages([userInfo.picture]);
+      if (userInfo?.banner) prefetchImages([userInfo.banner]);
+    }, [userInfo]);
+    ```
+  </Accordion>
+
+  <Accordion title="Handle NIP-05 verification">
+    ```typescript
+    const nip05Verified = userInfo?.nip05 && !userInfo?.hasNip05Conflict;
+    
+    {nip05Verified && (
+      <HStack>
+        <Icon name="mdi:check-decagram" color={successColor} />
+        <Text>{userInfo.nip05}</Text>
+      </HStack>
+    )}
+    ```
+  </Accordion>
+
+  <Accordion title="Safely parse profile JSON">
+    ```typescript
+    const userInfo = useMemo(() => {
+      if (!metadataEvents?.[0]) return null;
+      try {
+        return JSON.parse(metadataEvents[0].content);
+      } catch {
+        console.warn('Invalid profile metadata JSON');
+        return null;
+      }
+    }, [metadataEvents]);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Identity & Keys" icon="key" href="/nostr/identity">
+    NIP-06 key derivation for profile signing
+  </Card>
+  
+  <Card title="Contacts" icon="users" href="/nostr/contacts">
+    Contact lists and follow management
+  </Card>
+  
+  <Card title="Direct Messages" icon="message" href="/nostr/direct-messages">
+    Send DMs from profile screen
+  </Card>
+  
+  <Card title="Lightning Address" icon="bolt" href="/nostr/lightning-address">
+    Claim Lightning addresses for your profile
+  </Card>
+</CardGroup>

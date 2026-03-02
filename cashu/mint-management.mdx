@@ -1,0 +1,364 @@
+---
+title: Mint Management
+description: Add, remove, and manage Cashu mints in Sovran
+icon: building-columns
+---
+
+## Overview
+
+Sovran allows you to use multiple Cashu mints simultaneously. The mint management system handles:
+
+- Discovering and adding new mints
+- Viewing mint information and metadata
+- Trusting/untrusting mints
+- Checking mint balances
+- Restoring funds from mints
+
+## Adding Mints
+
+### Via the Add Mints Screen
+
+The primary mint discovery interface (`app/(mint-flow)/add.tsx`) shows:
+
+1. **Discovered mints** from Nostr and Sovran's curated list
+2. **KYM scores** (community ratings)
+3. **Audit data** (success rates, operation counts)
+4. **Currency filters** (SAT, USD, EUR, GBP)
+
+```typescript
+import { useMintManagement } from '@/hooks/coco/useMintManagement';
+import { useNostrDiscoveredMints } from 'hooks/coco/useNostrDiscoveredMints';
+import { useSovranDiscoveredMints } from 'hooks/coco/useSovranDiscoveredMints';
+
+function AddMintsScreen() {
+  const { addMint } = useMintManagement();
+  const { mints: nostrMints } = useNostrDiscoveredMints();
+  const { mints: sovranMints } = useSovranDiscoveredMints();
+  
+  // Merge and deduplicate
+  const discoveredMints = [...nostrMints, ...sovranMints];
+}
+```
+
+### Discovery Sources
+
+**Nostr Discovery** (`useNostrDiscoveredMints`):
+- Subscribes to kind `10002` (relay lists) for mint recommendations
+- Extracts mint URLs from Nostr events
+- Fetches mint info for each discovered URL
+
+**Sovran Discovery** (`useSovranDiscoveredMints`):
+- Curated list from Sovran's backend
+- Pre-vetted, high-quality mints
+- Updated regularly
+
+### Adding a Mint Programmatically
+
+```typescript
+import { useMintManagement } from '@/hooks/coco/useMintManagement';
+
+const { addMint, getMintInfo } = useMintManagement();
+
+// Add mint and trust it
+await addMint('https://mint.example.com');
+
+// Fetch mint information
+const info = await getMintInfo('https://mint.example.com');
+```
+
+### URL Validation
+
+The `useDebouncedMintValidation` hook validates mint URLs in real-time:
+
+```typescript
+import { useDebouncedMintValidation } from 'hooks/coco/useDebouncedMintValidation';
+
+const {
+  url,
+  setUrl,
+  validationState,  // { isValid, isLoading, error }
+  mintInfo
+} = useDebouncedMintValidation(800); // 800ms debounce
+```
+
+**Validation checks:**
+- URL format (https:// or http://)
+- Reachability
+- Valid Cashu mint (responds to `GET /v1/info`)
+- NUT support (protocols implemented)
+
+## Mint List Screen
+
+The mint list (`app/(mint-flow)/list.tsx`) displays owned mints with:
+
+- Balance per mint
+- Currency filtering
+- Mint selection for operations
+- Quick access to mint details
+
+```typescript
+import { MintListScreen } from 'components/screens/MintListScreen';
+
+<MintListScreen
+  requireBalance={true}           // Only show mints with balance
+  minAmount={1000}                // Minimum balance filter (sats)
+  allowedMints={['mint1', 'mint2']} // Restrict to specific mints
+  showDetailsButton={true}
+  onMintSelect={(mint) => {
+    // Handle mint selection
+  }}
+  onInspectMint={(mintUrl) => {
+    router.navigate('/info', { mintUrl });
+  }}
+/>
+```
+
+### Filtering Mints
+
+**By currency:**
+```typescript
+const mintsForUnit = trustedMints.filter((mint) => {
+  if (!mint.mintInfo?.nuts?.['4']?.methods) return false;
+  return mint.mintInfo.nuts['4'].methods.some(
+    (method) => method.unit?.toLowerCase() === 'sat'
+  );
+});
+```
+
+**By balance:**
+```typescript
+const { balance } = useBalanceContext();
+
+const mintsWithBalance = trustedMints.filter((mint) => {
+  return (balance[mint.mintUrl] || 0) > 0;
+});
+```
+
+## Mint Information
+
+The mint info screen (`app/(mint-flow)/info.tsx`) displays comprehensive mint details:
+
+### Basic Info
+
+```typescript
+interface MintInfo {
+  name: string;
+  pubkey?: string;
+  version?: string;
+  description?: string;
+  description_long?: string;
+  icon_url?: string;
+  motd?: string;  // Message of the day
+  contact?: Contact[];
+  nuts: Record<string, any>;  // Supported NUTs
+}
+
+interface Contact {
+  method: 'email' | 'twitter' | 'nostr' | string;
+  info: string;
+}
+```
+
+### Usage Example
+
+```typescript
+import { useAuditedMint } from 'hooks/coco/useAuditedMint';
+import { useKYMMint } from 'hooks/coco/useKYMMint';
+
+function MintInfoScreen({ mintUrl }: { mintUrl: string }) {
+  const { auditInfo, mintInfo, loading } = useAuditedMint(mintUrl);
+  const { score, recommendations } = useKYMMint(mintUrl);
+  
+  return (
+    <View>
+      <Text>{mintInfo?.name || 'Unknown Mint'}</Text>
+      <Text>Community Rating: {score?.toFixed(1)}/5</Text>
+      <Text>Success Rate: {auditInfo?.successRate}%</Text>
+    </View>
+  );
+}
+```
+
+## Mint Operations
+
+### Trust Management
+
+```typescript
+import { CocoManager } from 'helper/coco/manager';
+
+const manager = CocoManager.getInstance();
+
+// Add and trust a mint
+await manager.mint.addMint(mintUrl);
+await manager.mint.trustMint(mintUrl);
+
+// Check if mint is trusted
+const isTrusted = await manager.mint.isTrustedMint(mintUrl);
+
+// Untrust a mint
+await manager.mint.untrustMint(mintUrl);
+
+// Get all trusted mints
+const trustedMints = await manager.mint.getAllTrustedMints();
+```
+
+### Getting Balances
+
+```typescript
+import { useBalanceContext } from 'coco-cashu-react';
+
+function BalanceDisplay() {
+  const { balance } = useBalanceContext();
+  
+  // balance: Record<mintUrl, amount>
+  const totalBalance = Object.values(balance).reduce(
+    (sum, amt) => sum + amt, 
+    0
+  );
+  
+  return <Text>{totalBalance} sats</Text>;
+}
+```
+
+### Restoring Funds
+
+If you've lost local proof data but have your mnemonic, restore from mints:
+
+```typescript
+import { useMintManagement } from '@/hooks/coco/useMintManagement';
+
+const { restoreMint } = useMintManagement();
+
+// Scans mint for proofs derived from your seed
+await restoreMint(mintUrl);
+```
+
+**How it works:**
+1. Derives proof secrets from your mnemonic
+2. Queries mint for matching proofs
+3. Downloads and stores valid proofs
+4. Updates local balance
+
+<Warning>
+Restore only works if the mint still has your proofs. If proofs were already redeemed by someone else, they cannot be recovered.
+</Warning>
+
+## Mint Selection UI
+
+The `MintListScreen` component provides a reusable mint selection interface:
+
+```typescript
+import { MintListScreen } from 'components/screens/MintListScreen';
+
+<MintListScreen
+  requireBalance={true}
+  showDetailsButton={true}
+  currencyLabel="Currency"
+  mintsLabel="Your mints"
+  closeButtonLabel="Close"
+  onMintSelect={(mint) => {
+    console.log('Selected:', mint);
+  }}
+  onInspectMint={(mintUrl) => {
+    console.log('Inspect:', mintUrl);
+  }}
+  onClose={() => {
+    router.back();
+  }}
+/>
+```
+
+### Currency Tabs
+
+The mint list includes currency filtering with animated tabs:
+
+```typescript
+import { MintCurrencyTabs } from 'components/blocks/sheets/mint-balance/MintCurrencyTabs';
+
+<MintCurrencyTabs
+  currencies={['ALL', 'SAT', 'USD', 'EUR']}
+  selectedCurrency={selectedCurrency}
+  onCurrencyChange={setSelectedCurrency}
+  scrollY={scrollY}  // For sticky header animation
+/>
+```
+
+## Advanced: Direct Manager Access
+
+For low-level operations, use the `CocoManager` directly:
+
+```typescript
+import { CocoManager } from 'helper/coco/manager';
+
+const manager = CocoManager.getInstance();
+
+// Get wallet for specific mint
+const wallet = await manager.walletService.getWallet(mintUrl);
+
+// Get mint info
+const info = await manager.mint.getMintInfo(mintUrl);
+
+// Check if manager is initialized
+if (CocoManager.isInitialized()) {
+  // Safe to use manager
+}
+
+// Restore inflight proofs (after failed operations)
+await CocoManager.restoreInflightProofsForMint(mintUrl);
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Multiple Mints">
+    Don't put all your funds in one mint. Distribute across 3-5 trusted mints to reduce custodial risk.
+  </Accordion>
+  
+  <Accordion title="Check Ratings Before Adding">
+    Always review KYM scores and audit data before trusting a new mint. See [Know Your Mint](/cashu/know-your-mint).
+  </Accordion>
+  
+  <Accordion title="Monitor Balances">
+    Keep an eye on per-mint balances. Use [wallet rebalancing](/cashu/wallet-rebalancing) to maintain target distributions.
+  </Accordion>
+  
+  <Accordion title="Backup Your Mnemonic">
+    Your mnemonic is the only way to restore funds if you lose your device. Store it securely offline.
+  </Accordion>
+</AccordionGroup>
+
+## Error Handling
+
+```typescript
+import { useMintManagement } from '@/hooks/coco/useMintManagement';
+import { 
+  managerNotInitializedPopup,
+  mintsAddFailedPopup,
+  mintsAddedPopup 
+} from '@/helper/popup';
+
+const { addMint, error } = useMintManagement();
+
+try {
+  await addMint(mintUrl);
+  mintsAddedPopup({ added: 1 });
+} catch (err) {
+  if (err.message.includes('not initialized')) {
+    managerNotInitializedPopup();
+  } else {
+    mintsAddFailedPopup();
+  }
+}
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Know Your Mint" icon="shield-check" href="/cashu/know-your-mint">
+    Learn about mint auditing and ratings
+  </Card>
+  
+  <Card title="Wallet Rebalancing" icon="scale-balanced" href="/cashu/wallet-rebalancing">
+    Automatically distribute balance across mints
+  </Card>
+</CardGroup>

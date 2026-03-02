@@ -1,0 +1,407 @@
+---
+title: 'Routing'
+description: 'Expo Router file-based routing architecture'
+icon: 'route'
+---
+
+## Expo Router Overview
+
+Sovran uses [Expo Router](https://docs.expo.dev/router/introduction/) for navigation, which provides file-based routing similar to Next.js. Routes are defined by the file structure in the `app/` directory.
+
+## Navigation Hierarchy
+
+The app follows a three-level navigation structure:
+
+```
+┌─────────────────────────────────────┐
+│  Root Stack (_layout.tsx)           │
+│  ┌───────────────────────────────┐  │
+│  │  Drawer ((drawer)/_layout.tsx)│  │
+│  │  ┌─────────────────────────┐  │  │
+│  │  │  Tabs ((tabs)/_layout)  │  │  │
+│  │  │  - Feed                 │  │  │
+│  │  │  - Wallet               │  │  │
+│  │  │  - Payments             │  │  │
+│  │  │  - Explore              │  │  │
+│  │  └─────────────────────────┘  │  │
+│  └───────────────────────────────┘  │
+│  + Modal flows (send, receive, etc) │
+└─────────────────────────────────────┘
+```
+
+## Root Layout
+
+app/_layout.tsx:1-334
+
+**Key responsibilities:**
+- Initialize provider hierarchy (see [Architecture Overview](/architecture/overview#provider-hierarchy))
+- Configure Stack navigator with modal presentations
+- Handle theme changes via React `key` prop
+- Manage profile switching by remounting inner providers
+
+**Screen options:**
+```tsx
+<Stack
+  screenOptions={{
+    headerShown: false,
+    gestureEnabled: true,
+    contentStyle: { backgroundColor: contentBackgroundColor }
+  }}
+>
+  <Stack.Screen name="(drawer)" />
+  {MODAL_SCREENS.map(screen => (
+    <Stack.Screen key={screen.name} name={screen.name} options={...} />
+  ))}
+</Stack>
+```
+
+## Drawer Layout
+
+app/(drawer)/_layout.tsx:1-454
+
+The drawer provides the main app navigation with a custom drawer content component.
+
+**Features:**
+- Profile switcher at the top (switch between multiple wallets)
+- User avatar and QR code (tap to view profile)
+- Menu items: Feed, Wallet, Payments, Settings
+- 82% screen width (max 320px)
+- Slide animation with 60% black overlay
+
+**Profile switching:**
+
+app/(drawer)/_layout.tsx:89-119
+
+**Menu structure:**
+```tsx
+const MENU_ITEMS = [
+  { icon: 'mingcute:home-4-fill', label: 'Feed', route: '(drawer)/(tabs)/feed' },
+  { icon: 'fluent:wallet-20-filled', label: 'Wallet', route: '(drawer)/(tabs)/index' },
+  { icon: 'fluent:arrow-swap-16-filled', label: 'Payments', route: '(drawer)/(tabs)/payments' },
+  { icon: 'material-symbols:settings-rounded', label: 'Settings', route: 'settings-pages' }
+];
+```
+
+## Tab Layout
+
+app/(drawer)/(tabs)/_layout.tsx:1-166
+
+The tabs use **conditional rendering** based on device capabilities:
+
+### iOS 26+ with Liquid Glass
+
+app/(drawer)/(tabs)/_layout.tsx:38-98
+
+Uses `Expo55NativeTabs` for native iOS tab bar with blur effects.
+
+### Android & iOS (below version 26)
+
+app/(drawer)/(tabs)/_layout.tsx:102-164
+
+Fallback to standard `Tabs` with `BlurView` background.
+
+**Tab structure:**
+- **Feed** (`feed/`) - Social feed and stories (house icon)
+- **Payments** (`payments/`) - Contacts and messages (arrow.up.arrow.down icon)
+- **Wallet** (`index/`) - Balances and transactions (wallet.bifold icon)
+- **Explore** (`explore/`) - AI chat, maps, pending ecash (paperplane icon)
+
+<Note>
+The wallet tab is at `index/` (not `wallet/`) for backward compatibility with deep links.
+</Note>
+
+## Route Groups
+
+Expo Router uses parentheses `()` for route groups that don't appear in URLs:
+
+### Flow-Based Groups
+
+These groups represent multi-step user flows:
+
+| Group | Purpose | Screens |
+|-------|---------|----------|
+| `(send-flow)` | Send payments | currency → mintSelect → sendToken → meltQuote |
+| `(receive-flow)` | Receive payments | receive → currency → mintQuote → receiveToken |
+| `(mint-flow)` | Mint management | add → list → info → reviews → rebalancePlan |
+| `(user-flow)` | User profiles | profile → share → userMessages → thread |
+| `(map-flow)` | BTCMap integration | index (map) → detail (merchant) |
+| `(filter-flow)` | Transaction filters | filters |
+| `(transactions-flow)` | Transaction details | transactions → swap → sendToken → receiveToken |
+
+### Special Layouts
+
+Each route group has a `_layout.tsx` that configures:
+- Presentation style (modal, formSheet, card)
+- Header options (title, background, blur)
+- Gesture handling
+- Animation settings
+
+Example from send flow:
+
+```tsx
+// app/(send-flow)/_layout.tsx
+export default function SendFlowLayout() {
+  return (
+    <Stack
+      screenOptions={{
+        presentation: 'modal',
+        headerShown: true,
+        headerBlurEffect: 'regular',
+        headerTransparent: true,
+      }}
+    >
+      <Stack.Screen name="currency" options={{ title: 'Amount' }} />
+      <Stack.Screen name="mintSelect" options={{ title: 'Select Mint' }} />
+      <Stack.Screen name="sendToken" options={{ title: 'Send' }} />
+      <Stack.Screen name="meltQuote" options={{ title: 'Pay Lightning' }} />
+    </Stack>
+  )
+}
+```
+
+## Navigation Patterns
+
+### Type-Safe Navigation
+
+```tsx
+import { router } from 'expo-router';
+
+// Navigate to a screen with params
+router.navigate({
+  pathname: '/(send-flow)/sendToken' as any,
+  params: {
+    amount: '1000',
+    selectedMintUrl: 'https://mint.example.com',
+  }
+});
+
+// Replace current screen
+router.replace({
+  pathname: '/(receive-flow)/receiveToken' as any,
+  params: { token: 'cashuA...' }
+});
+
+// Go back
+router.back();
+```
+
+<Warning>
+The `as any` cast is required because Expo Router's TypeScript types don't fully support dynamic route groups yet. This is safe as long as the pathname string matches an actual route file.
+</Warning>
+
+### Deep Linking
+
+app.json configures deep link schemes:
+
+```json
+{
+  "expo": {
+    "scheme": ["sovran", "cashu"]
+  }
+}
+```
+
+Deep links are handled by `useDeeplink` hook:
+
+```tsx
+// hooks/useDeeplink.ts
+import { useEffect } from 'react';
+import * as Linking from 'expo-linking';
+import { router } from 'expo-router';
+
+export function useDeeplink() {
+  useEffect(() => {
+    const handleUrl = (event: { url: string }) => {
+      const { hostname, path, queryParams } = Linking.parse(event.url);
+      
+      // cashu://token?token=cashuA...
+      if (hostname === 'token') {
+        router.navigate({
+          pathname: '/(receive-flow)/receiveToken',
+          params: { token: queryParams.token }
+        });
+      }
+    };
+    
+    Linking.addEventListener('url', handleUrl);
+    return () => Linking.removeEventListener('url', handleUrl);
+  }, []);
+}
+```
+
+### Modal Presentations
+
+app/_layout.tsx:216-220
+
+Modal screens are configured in `config/modalScreens.ts`:
+
+```tsx
+interface ModalConfig {
+  name: string;
+  title?: string;
+  options?: {
+    presentation?: 'modal' | 'formSheet' | 'card';
+    headerShown?: boolean;
+    headerTransparent?: boolean;
+    // ... other options
+  };
+}
+
+export const MODAL_SCREENS: ModalConfig[] = [
+  {
+    name: '(send-flow)',
+    options: { presentation: 'modal', headerShown: false }
+  },
+  {
+    name: 'camera',
+    title: 'Scan QR Code',
+    options: { presentation: 'fullScreenModal' }
+  },
+  // ... more screens
+];
+```
+
+## Route Parameters
+
+Access route parameters using `useLocalSearchParams`:
+
+```tsx
+import { useLocalSearchParams } from 'expo-router';
+
+export default function SendTokenScreen() {
+  const { amount, selectedMintUrl } = useLocalSearchParams<{
+    amount?: string;
+    selectedMintUrl?: string;
+  }>();
+  
+  return (
+    <View>
+      <Text>Amount: {amount}</Text>
+      <Text>Mint: {selectedMintUrl}</Text>
+    </View>
+  );
+}
+```
+
+## Payment Flow Routing
+
+The payment flows use intelligent routing based on available data:
+
+hooks/coco/useProcessPaymentString.ts:216-331
+
+**Payment request routing logic:**
+
+| Mints | Amount | Valid | Flow |
+|-------|--------|-------|------|
+| No    | No     | Any   | currency.tsx (pick mint + amount) → SendTokenScreen |
+| No    | Yes    | 1     | SendTokenScreen directly |
+| No    | Yes    | 2+    | mintSelect.tsx → SendTokenScreen |
+| Yes   | No     | 1     | currency.tsx (amount only) → SendTokenScreen |
+| Yes   | No     | 2+    | currency.tsx (pick from allowed + amount) → SendTokenScreen |
+| Yes   | Yes    | 1     | SendTokenScreen (PR mode) directly |
+| Yes   | Yes    | 2+    | mintSelect.tsx → SendTokenScreen (PR mode) |
+
+This minimizes user friction by skipping screens when data is already available.
+
+## Screen Transitions
+
+Sovran uses **hero transitions** for seamless animations between screens:
+
+```tsx
+import { HeroTransition } from '@/components/ui/hero-transition';
+
+// Source screen
+<HeroTransition.View transitionId="wallet-card">
+  <WalletCard />
+</HeroTransition.View>
+
+// Destination screen
+<HeroTransition.View transitionId="wallet-card">
+  <WalletDetailView />
+</HeroTransition.View>
+```
+
+Example: Tapping the wallet health card on explore page transitions to full health modal with shared element animation.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Keep screens thin">
+    Screens in `app/` should be orchestration-only. Move business logic to `hooks/`, data fetching to `stores/`, and UI to `components/blocks/`.
+    
+    ```tsx
+    // Good ✅
+    export default function SendTokenScreen() {
+      const { amount } = useLocalSearchParams();
+      const { send } = useSendWithHistory();
+      
+      return <SendTokenView amount={amount} onSend={send} />;
+    }
+    
+    // Bad ❌
+    export default function SendTokenScreen() {
+      const [loading, setLoading] = useState(false);
+      // ... 200 lines of business logic
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use replace for form flows">
+    When navigating from a form screen to another form screen, use `router.replace()` to avoid stack buildup:
+    
+    ```tsx
+    // User enters amount, then selects mint
+    router.replace({
+      pathname: '/(send-flow)/mintSelect',
+      params: { amount: '1000' }
+    });
+    ```
+  </Accordion>
+  
+  <Accordion title="Validate params early">
+    Route parameters are always strings or undefined. Validate and parse them at the top of the component:
+    
+    ```tsx
+    export default function SendTokenScreen() {
+      const params = useLocalSearchParams<{ amount?: string }>();
+      
+      const amount = useMemo(() => {
+        const parsed = parseInt(params.amount ?? '0', 10);
+        return isNaN(parsed) ? 0 : parsed;
+      }, [params.amount]);
+      
+      if (amount === 0) {
+        return <ErrorView message="Invalid amount" />;
+      }
+      
+      // ... rest of component
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle back navigation">
+    Always consider what happens when the user goes back. Use `router.canGoBack()` to check if there's a previous screen:
+    
+    ```tsx
+    const handleBack = () => {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(drawer)/(tabs)/index');
+      }
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="State Management" href="/architecture/state-management" icon="database">
+    Learn how Zustand stores integrate with navigation
+  </Card>
+  
+  <Card title="Cashu Integration" href="/architecture/cashu-integration" icon="coins">
+    See how payment flows interact with Coco manager
+  </Card>
+</CardGroup>

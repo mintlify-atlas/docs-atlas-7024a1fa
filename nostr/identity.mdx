@@ -1,0 +1,501 @@
+---
+title: 'Nostr Identity & Key Management'
+description: 'NIP-06 key derivation, secure storage, and multi-account support'
+---
+
+Sovran uses **NIP-06** hierarchical deterministic key derivation to generate Nostr keypairs from your BIP-39 mnemonic. This provides a single backup phrase that controls both your Bitcoin wallet and Nostr identity.
+
+## Key Derivation (NIP-06)
+
+### Derivation Path
+
+Nostr keys follow the path: `m/44'/1237'/<accountIndex>'/0/0`
+
+- **Purpose**: `44'` (BIP-44)
+- **Coin Type**: `1237'` (Nostr)
+- **Account**: `0'` (default), `1'`, `2'`, etc.
+- **Change**: `0` (external)
+- **Index**: `0` (first key)
+
+```typescript
+// helper/keyDerivation.ts
+import * as nip06 from 'nostr-tools/nip06';
+import { nip19 } from 'nostr-tools';
+
+export interface DerivedNostrKeys {
+  npub: string;        // Nostr public key (bech32)
+  nsec: string;        // Nostr secret key (bech32)
+  pubkey: string;      // Public key (hex)
+  privateKey: Uint8Array; // Private key (bytes)
+}
+
+export function deriveNostrKeys(
+  mnemonic: string,
+  accountIndex: number = 0
+): DerivedNostrKeys {
+  const { privateKey: sk, publicKey: pk } = nip06.accountFromSeedWords(
+    mnemonic,
+    undefined,
+    accountIndex
+  );
+
+  return {
+    npub: nip19.npubEncode(pk),
+    nsec: nip19.nsecEncode(sk),
+    pubkey: pk,
+    privateKey: sk,
+  };
+}
+```
+
+### Example Usage
+
+```typescript
+const mnemonic = 'witch collapse practice feed shame open despair creek road again ice least';
+
+// Default account (index 0)
+const account0 = deriveNostrKeys(mnemonic, 0);
+console.log(account0.npub); // npub1...
+
+// Second account (index 1)
+const account1 = deriveNostrKeys(mnemonic, 1);
+console.log(account1.npub); // npub1... (different)
+```
+
+<Warning>
+Never expose or log the `nsec` or `privateKey` in production. These grant full control over the Nostr identity.
+</Warning>
+
+## NostrKeysProvider
+
+The `NostrKeysProvider` manages key derivation, caching, and account switching.
+
+### Provider Features
+
+- **Automatic key derivation** from mnemonic on app startup
+- **SecureStore caching** to avoid expensive re-derivation
+- **Multi-account support** with `getKeysForAccount(index)`
+- **Mnemonic hash validation** to detect mnemonic changes
+- **Integration with CocoManager** for Cashu wallet sync
+
+### Implementation
+
+```typescript
+// providers/NostrKeysProvider.tsx
+import { useNostrKeysContext } from 'providers/NostrKeysProvider';
+
+function MyComponent() {
+  const { keys, isReady, getKeysForAccount } = useNostrKeysContext();
+
+  if (!isReady) return <Loading />;
+
+  return (
+    <View>
+      <Text>Your npub: {keys?.npub}</Text>
+      <Button onPress={async () => {
+        const account1Keys = await getKeysForAccount(1);
+        console.log('Account 1:', account1Keys?.npub);
+      }}>
+        Switch to Account 1
+      </Button>
+    </View>
+  );
+}
+```
+
+### Context API
+
+```typescript
+interface NostrKeysContextValue {
+  /** Current account's derived keys */
+  keys: NostrKeys | null;
+  
+  /** Cashu mnemonic for current account */
+  cashuMnemonic: string | null;
+  
+  /** Whether keys are ready to use */
+  isReady: boolean;
+  
+  /** Loading state during derivation */
+  isLoading: boolean;
+  
+  /** Error message if derivation failed */
+  error: string | null;
+  
+  /** Re-derive keys (e.g., after mnemonic change) */
+  refresh: () => Promise<void>;
+  
+  /** Get keys for a different account index */
+  getKeysForAccount: (accountIndex: number) => Promise<NostrKeys | null>;
+  
+  /** Get Cashu mnemonic for a different account */
+  getCashuMnemonicForAccount: (accountIndex: number) => Promise<string | null>;
+}
+```
+
+## Secure Storage
+
+### Key Caching Strategy
+
+To avoid re-deriving keys on every app launch (which is expensive), Sovran caches derived keys in Expo SecureStore:
+
+```typescript
+// helper/secureStorage.ts
+export interface CachedDerivedKeys {
+  npub: string;
+  nsec: string;
+  pubkey: string;
+  privateKeyHex: string;
+  mnemonicHash: string; // SHA-256 of mnemonic for validation
+}
+
+export async function storeDerivedKeys(
+  accountIndex: number,
+  keys: CachedDerivedKeys
+): Promise<void> {
+  const key = `derived-keys-${accountIndex}`;
+  await SecureStore.setItemAsync(key, JSON.stringify(keys));
+}
+
+export async function retrieveDerivedKeys(
+  accountIndex: number
+): Promise<CachedDerivedKeys | null> {
+  const key = `derived-keys-${accountIndex}`;
+  const json = await SecureStore.getItemAsync(key);
+  return json ? JSON.parse(json) : null;
+}
+```
+
+### Cache Validation
+
+Cached keys are only used if the mnemonic hasn't changed:
+
+```typescript
+import { hashMnemonic } from 'helper/secureStorage';
+
+const mHash = hashMnemonic(mnemonicToUse);
+const [cachedDerived, cachedCashu] = await Promise.all([
+  retrieveDerivedKeys(defaultAccountIndex),
+  retrieveCashuMnemonic(defaultAccountIndex),
+]);
+
+const cacheValid =
+  cachedDerived?.mnemonicHash === mHash &&
+  cachedCashu?.mnemonicHash === mHash;
+
+if (cacheValid && cachedDerived && cachedCashu) {
+  // Use cached keys (fast path)
+  defaultKeys = {
+    npub: cachedDerived.npub,
+    nsec: cachedDerived.nsec,
+    pubkey: cachedDerived.pubkey,
+    privateKey: hexToBytes(cachedDerived.privateKeyHex),
+  };
+} else {
+  // Re-derive from mnemonic (slow path)
+  defaultKeys = deriveNostrKeys(mnemonicToUse, defaultAccountIndex);
+  // Cache for next time
+  await storeDerivedKeys(defaultAccountIndex, { ...defaultKeys, mnemonicHash: mHash });
+}
+```
+
+## Multi-Account Support
+
+### Account Switching
+
+Sovran supports multiple Nostr identities derived from the same mnemonic:
+
+```typescript
+// Get keys for account 0 (default)
+const account0 = await getKeysForAccount(0);
+
+// Get keys for account 1
+const account1 = await getKeysForAccount(1);
+
+// Each account has a unique npub/nsec pair
+console.log(account0.npub !== account1.npub); // true
+```
+
+### Profile Store Integration
+
+The `profileStore` tracks which accounts have been created:
+
+```typescript
+// stores/profileStore.ts
+import { create } from 'zustand';
+
+interface ProfileState {
+  profiles: Map<number, string>; // accountIndex -> pubkey
+  activeAccountIndex: number;
+  addProfile: (accountIndex: number, pubkey: string) => void;
+  switchAccount: (accountIndex: number) => void;
+}
+
+export const useProfileStore = create<ProfileState>((set) => ({
+  profiles: new Map(),
+  activeAccountIndex: 0,
+  addProfile: (accountIndex, pubkey) =>
+    set((state) => {
+      const profiles = new Map(state.profiles);
+      profiles.set(accountIndex, pubkey);
+      return { profiles };
+    }),
+  switchAccount: (accountIndex) => set({ activeAccountIndex: accountIndex }),
+}));
+```
+
+### Use Case: Testing
+
+Multi-account support is useful for:
+
+- **Testing**: Create separate accounts for testing without affecting your main identity
+- **Privacy**: Use different identities for different contexts
+- **Business/Personal**: Separate professional and personal Nostr activity
+
+## Initialization Flow
+
+Here's how Sovran initializes Nostr keys on app startup:
+
+<Steps>
+  <Step title="Check SecureStore for mnemonic">
+    Try to load the mnemonic from Expo SecureStore. If it doesn't exist, check Redux as a fallback migration path.
+  </Step>
+
+  <Step title="Generate mnemonic if needed">
+    If no mnemonic exists anywhere, generate a new 12-word BIP-39 mnemonic and store it in SecureStore.
+  </Step>
+
+  <Step title="Hash mnemonic for cache validation">
+    Compute SHA-256 hash of the mnemonic to validate cached keys.
+  </Step>
+
+  <Step title="Check cache for derived keys">
+    Look for cached Nostr keys and Cashu mnemonic in SecureStore for the current account index.
+  </Step>
+
+  <Step title="Derive keys if cache miss">
+    If cache is invalid or missing, derive fresh keys using NIP-06 and BIP-32. This is the slow path.
+  </Step>
+
+  <Step title="Update cache in background">
+    Store the newly derived keys in SecureStore for next time. This happens asynchronously.
+  </Step>
+
+  <Step title="Set keys in context">
+    Expose the keys via `NostrKeysContext` so components can access `keys`, `cashuMnemonic`, etc.
+  </Step>
+
+  <Step title="Initialize CocoManager">
+    Configure the Cashu wallet manager with the account index and Cashu mnemonic.
+  </Step>
+
+  <Step title="Register with profileStore">
+    Add the pubkey to the profile store so it appears in account switcher.
+  </Step>
+</Steps>
+
+```typescript
+// Simplified initialization logic from NostrKeysProvider
+const initializeKeys = async () => {
+  let mnemonicToUse = mnemonic || getMnemonicFromRedux() || await ensureMnemonicExists();
+  
+  const mHash = hashMnemonic(mnemonicToUse);
+  const [cachedDerived, cachedCashu] = await Promise.all([
+    retrieveDerivedKeys(defaultAccountIndex),
+    retrieveCashuMnemonic(defaultAccountIndex),
+  ]);
+  
+  const cacheValid = cachedDerived?.mnemonicHash === mHash && cachedCashu?.mnemonicHash === mHash;
+  
+  if (cacheValid && cachedDerived && cachedCashu) {
+    defaultKeys = { ...cachedDerived, privateKey: hexToBytes(cachedDerived.privateKeyHex) };
+    defaultCashuMnemonic = cachedCashu.value;
+  } else {
+    defaultKeys = deriveNostrKeys(mnemonicToUse, defaultAccountIndex);
+    defaultCashuMnemonic = deriveCashuMnemonicPure(mnemonicToUse, defaultAccountIndex);
+    // Cache in background
+    Promise.all([
+      storeDerivedKeys(defaultAccountIndex, { ...defaultKeys, mnemonicHash: mHash }),
+      storeCashuMnemonic(defaultAccountIndex, defaultCashuMnemonic, mHash),
+    ]);
+  }
+  
+  setKeys(defaultKeys);
+  setCashuMnemonic(defaultCashuMnemonic);
+  CocoManager.setAccountIndex(defaultAccountIndex);
+  CocoManager.setCashuMnemonic(defaultCashuMnemonic);
+  useProfileStore.getState().addProfile(defaultAccountIndex, defaultKeys.pubkey);
+  setIsReady(true);
+};
+```
+
+## Cashu Key Derivation
+
+Sovran also derives a separate Cashu wallet mnemonic from the root mnemonic:
+
+```typescript
+// helper/keyDerivation.ts
+const CASHU_DERIVATION_PREFIX = `m/44'/129372'`;
+
+/**
+ * Derive a Cashu (NUT-13) mnemonic from a BIP-39 root mnemonic.
+ * Path: m/44'/129372'/0'/<accountIndex>'/0/0
+ */
+export function deriveCashuMnemonic(mnemonic: string, accountIndex: number = 0): string {
+  const seed = bip39.mnemonicToSeedSync(mnemonic);
+  const root = HDKey.fromMasterSeed(seed);
+  const path = `${CASHU_DERIVATION_PREFIX}/0'/${accountIndex}'/0/0`;
+  const child = root.derive(path);
+  // Re-encode the 32-byte private key as a 24-word mnemonic
+  return bip39.entropyToMnemonic(child.privateKey as Uint8Array, wordlist);
+}
+```
+
+This allows both Nostr and Cashu identities to be recovered from a single backup phrase.
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Never log private keys">
+    ```typescript
+    // ❌ NEVER DO THIS
+    console.log('Private key:', keys.privateKey);
+    console.log('nsec:', keys.nsec);
+    
+    // ✅ OK to log public keys
+    console.log('npub:', keys.npub);
+    console.log('pubkey:', keys.pubkey);
+    ```
+  </Accordion>
+
+  <Accordion title="Validate mnemonic before use">
+    ```typescript
+    import * as bip39 from '@scure/bip39';
+    import { wordlist } from '@scure/bip39/wordlists/english';
+    
+    const isValid = bip39.validateMnemonic(mnemonic, wordlist);
+    if (!isValid) {
+      throw new Error('Invalid mnemonic phrase');
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Check keys before operations">
+    ```typescript
+    const { keys } = useNostrKeysContext();
+    
+    if (!keys?.privateKey || !keys?.pubkey) {
+      console.error('Nostr keys not available');
+      return;
+    }
+    
+    // Safe to use keys.privateKey for signing
+    const signedEvent = finalizeEvent(event, keys.privateKey);
+    ```
+  </Accordion>
+
+  <Accordion title="Clear sensitive data from memory">
+    While JavaScript doesn't provide explicit memory management, avoid storing private keys in long-lived variables:
+    
+    ```typescript
+    // ❌ Don't store privateKey in component state
+    const [privateKey, setPrivateKey] = useState<Uint8Array>();
+    
+    // ✅ Use context or get it when needed
+    const { keys } = useNostrKeysContext();
+    const privateKey = keys?.privateKey; // Only when needed
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Migration from Redux
+
+Older versions of Sovran stored mnemonics in Redux. The `NostrKeysProvider` automatically migrates:
+
+```typescript
+function getMnemonicFromRedux(): string | null {
+  try {
+    const { store } = require('../redux/store');
+    const state = store.getState();
+    const nostrState = state.nostr;
+    
+    if (nostrState.profiles && nostrState.profiles.length > 0) {
+      const profile0 = nostrState.profiles[0];
+      if (profile0?.mnemonic) {
+        const words = profile0.mnemonic.split(' ');
+        if (words.length === 12 || words.length === 24) {
+          return profile0.mnemonic;
+        }
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('Failed to get mnemonic from Redux:', error);
+    return null;
+  }
+}
+```
+
+On first launch after upgrading, the provider:
+
+1. Detects no mnemonic in SecureStore
+2. Checks Redux for a fallback
+3. Migrates the mnemonic to SecureStore
+4. Derives and caches keys as normal
+
+## Testing
+
+### Test Vectors
+
+Use known test mnemonics to verify correct derivation:
+
+```typescript
+import { deriveNostrKeys } from 'helper/keyDerivation';
+
+const testMnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+const keys = deriveNostrKeys(testMnemonic, 0);
+
+expect(keys.npub).toBe('npub1...');
+expect(keys.pubkey).toBe('...');
+```
+
+### Mock Provider
+
+For component tests, mock the `NostrKeysProvider`:
+
+```typescript
+import { NostrKeysContext } from 'providers/NostrKeysProvider';
+
+const mockKeys = {
+  npub: 'npub1test...',
+  nsec: 'nsec1test...',
+  pubkey: 'abcd1234...',
+  privateKey: new Uint8Array(32),
+};
+
+const MockKeysProvider = ({ children }) => (
+  <NostrKeysContext.Provider value={{ keys: mockKeys, isReady: true, isLoading: false, error: null }}>
+    {children}
+  </NostrKeysContext.Provider>
+);
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Direct Messages" icon="message" href="/nostr/direct-messages">
+    Use derived keys to send encrypted NIP-17 messages
+  </Card>
+  
+  <Card title="User Profiles" icon="user" href="/nostr/user-profiles">
+    Publish profile metadata for your Nostr identity
+  </Card>
+  
+  <Card title="Lightning Address" icon="bolt" href="/nostr/lightning-address">
+    Claim a Lightning address for your npub
+  </Card>
+  
+  <Card title="Secure Storage" icon="lock" href="/security/key-derivation">
+    Learn about Expo SecureStore and encryption
+  </Card>
+</CardGroup>

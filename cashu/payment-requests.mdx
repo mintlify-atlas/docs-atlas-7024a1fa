@@ -1,0 +1,574 @@
+---
+title: Payment Requests (NUT-18)
+description: Request and fulfill Cashu payments with optional constraints using NUT-18
+icon: file-invoice
+---
+
+## Overview
+
+Cashu payment requests (NUT-18) allow you to request ecash payments with optional constraints:
+
+- **Amount** - Specific amount or open-ended
+- **Mints** - Restrict to specific mints or accept any
+- **Transport** - Delivery method (Nostr DM, HTTP POST, WebSocket)
+- **Memo** - Description for the payment
+
+Payment requests are encoded as `creqA...` strings and can be shared via QR codes, NFC, or links.
+
+## Protocol Specification
+
+### Payment Request Structure
+
+```typescript
+import { decodePaymentRequest, PaymentRequestTransportType } from '@cashu/cashu-ts';
+
+interface PaymentRequest {
+  // Optional amount in base unit (sats, cents, etc.)
+  amount?: number;
+  
+  // Currency unit ('sat', 'usd', 'eur', etc.)
+  unit?: string;
+  
+  // Allowed mint URLs (empty = any mint)
+  mints?: string[];
+  
+  // Description/memo
+  description?: string;
+  
+  // Transport methods for payment delivery
+  transport: Transport[];
+}
+
+interface Transport {
+  type: PaymentRequestTransportType;
+  target: string;  // Nostr pubkey, HTTP URL, WebSocket URL, etc.
+  tags?: string[][];
+}
+
+enum PaymentRequestTransportType {
+  NOSTR = 'nostr',
+  POST = 'post',
+  WEBSOCKET = 'ws'
+}
+```
+
+### Encoding/Decoding
+
+```typescript
+import { 
+  decodePaymentRequest, 
+  encodePaymentRequest 
+} from '@cashu/cashu-ts';
+
+// Decode
+const request = decodePaymentRequest('creqA1...');
+console.log(request);
+// {
+//   amount: 100,
+//   unit: 'sat',
+//   mints: ['https://mint.example.com'],
+//   transport: [{ type: 'nostr', target: 'npub1...' }]
+// }
+
+// Encode
+const encoded = encodePaymentRequest({
+  amount: 100,
+  unit: 'sat',
+  transport: [{
+    type: PaymentRequestTransportType.NOSTR,
+    target: myPubkey
+  }]
+});
+// Returns: 'creqA1...'
+```
+
+## Detecting Payment Requests
+
+The `useProcessPaymentString` hook handles payment request scanning:
+
+```typescript
+import { useProcessPaymentString } from 'hooks/coco/useProcessPaymentString';
+import { decodePaymentRequest, PaymentRequestTransportType } from '@cashu/cashu-ts';
+
+// Check if string is a Nostr payment request
+function isNostrPaymentRequest(data: string): boolean {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith('creqA')) return false;
+  
+  try {
+    const decoded = decodePaymentRequest(trimmed);
+    const nostrTransport = decoded.transport?.find(
+      t => t.type === PaymentRequestTransportType.NOSTR
+    );
+    return !!nostrTransport;
+  } catch {
+    return false;
+  }
+}
+```
+
+## Processing Payment Requests
+
+When a payment request is scanned/pasted, Sovran routes based on available data:
+
+### Routing Logic
+
+```typescript
+if (isNostrPaymentRequest(data)) {
+  const decoded = decodePaymentRequest(data);
+  const hasMints = decoded.mints && decoded.mints.length > 0;
+  const hasAmount = decoded.amount !== undefined && decoded.amount > 0;
+  
+  // Calculate valid mints (balance + allowed mints filter)
+  const validMints = getValidMints(decoded.mints, decoded.amount);
+  const singleValidMint = validMints.length === 1 ? validMints[0] : null;
+  
+  // Route based on constraints:
+  if (!hasMints && !hasAmount) {
+    // No constraints - user picks mint + enters amount
+    router.navigate('/(send-flow)/currency', {
+      to: 'paymentRequest',
+      paymentRequest: data,
+      unit: decoded.unit || 'sat'
+    });
+  } else if (!hasMints && hasAmount) {
+    if (singleValidMint) {
+      // Only 1 valid mint - go directly to confirmation
+      router.navigate('/(send-flow)/sendToken', {
+        paymentRequest: data,
+        amount: String(decoded.amount),
+        selectedMintUrl: singleValidMint.mintUrl
+      });
+    } else {
+      // Multiple valid mints - show mint picker
+      router.navigate('/(send-flow)/mintSelect', {
+        to: 'paymentRequest',
+        paymentRequest: data,
+        minAmount: String(decoded.amount),
+        unit: decoded.unit || 'sat'
+      });
+    }
+  } else if (hasMints && !hasAmount) {
+    // Mints specified but no amount - user enters amount
+    router.navigate('/(send-flow)/currency', {
+      to: 'paymentRequest',
+      paymentRequest: data,
+      allowedMints: JSON.stringify(decoded.mints),
+      unit: decoded.unit || 'sat'
+    });
+  } else {
+    // Both mints and amount specified
+    if (singleValidMint) {
+      // Direct to confirmation
+      router.navigate('/(send-flow)/sendToken', {
+        paymentRequest: data,
+        amount: String(decoded.amount),
+        selectedMintUrl: singleValidMint.mintUrl
+      });
+    } else {
+      // Show mint picker (filtered by allowed mints)
+      router.navigate('/(send-flow)/mintSelect', {
+        to: 'paymentRequest',
+        paymentRequest: data,
+        allowedMints: JSON.stringify(decoded.mints),
+        minAmount: String(decoded.amount),
+        unit: decoded.unit || 'sat'
+      });
+    }
+  }
+}
+```
+
+### Valid Mints Calculation
+
+```typescript
+function getValidMints(
+  allowedMints: string[] | undefined,
+  minAmount: number | undefined
+) {
+  return trustedMints.filter((mint) => {
+    const balance = mintBalances[mint.mintUrl] || 0;
+    
+    // Must be in allowed list (if specified)
+    if (allowedMints && allowedMints.length > 0) {
+      if (!allowedMints.includes(mint.mintUrl)) {
+        return false;
+      }
+    }
+    
+    // Must have sufficient balance (if amount specified)
+    if (minAmount !== undefined && minAmount > 0) {
+      if (balance < minAmount) {
+        return false;
+      }
+    }
+    
+    // Must have some balance
+    if (balance === 0) {
+      return false;
+    }
+    
+    return true;
+  });
+}
+```
+
+## Fulfilling Payment Requests
+
+The `SendTokenScreen` handles payment request fulfillment:
+
+### Payment Request Mode
+
+```typescript
+import { SendTokenScreen } from 'components/screens/SendTokenScreen';
+
+<SendTokenScreen
+  paymentRequest={{
+    encodedRequest: 'creqA1...',
+    amount: 100,
+    mintUrl: 'https://mint.example.com'
+  }}
+  initialNostrSent={false}
+  onNavigateBack={() => router.back()}
+/>
+```
+
+### Workflow
+
+1. **Display confirmation UI**
+   - Show amount, destination (Nostr npub or URL)
+   - Preview memo/description
+   - Confirm selected mint
+
+2. **Create ecash token**
+   ```typescript
+   import { useSend } from 'coco-cashu-react';
+   
+   const { send } = useSend();
+   
+   const token = await send({
+     mintUrl: selectedMintUrl,
+     amount: paymentRequest.amount,
+     unit: paymentRequest.unit || 'sat'
+   });
+   ```
+
+3. **Send via transport**
+   
+   **Nostr DM:**
+   ```typescript
+   import { useNostrDirectMessage } from 'hooks/useNostrDirectMessage';
+   
+   const { sendDirectMessage } = useNostrDirectMessage();
+   
+   const nostrTransport = decoded.transport.find(
+     t => t.type === PaymentRequestTransportType.NOSTR
+   );
+   
+   if (nostrTransport) {
+     await sendDirectMessage({
+       recipientPubkey: nostrTransport.target,
+       message: token,
+       encrypted: true
+     });
+   }
+   ```
+   
+   **HTTP POST:**
+   ```typescript
+   const postTransport = decoded.transport.find(
+     t => t.type === PaymentRequestTransportType.POST
+   );
+   
+   if (postTransport) {
+     await fetch(postTransport.target, {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ token })
+     });
+   }
+   ```
+
+4. **Show confirmation**
+   - Display success message
+   - Update transaction history
+   - Return to previous screen
+
+## Creating Payment Requests
+
+### Basic Example
+
+```typescript
+import { encodePaymentRequest, PaymentRequestTransportType } from '@cashu/cashu-ts';
+import { nip19 } from 'nostr-tools';
+
+function createPaymentRequest({
+  amount,
+  myPubkey,
+  allowedMints = []
+}: {
+  amount?: number;
+  myPubkey: string;
+  allowedMints?: string[];
+}) {
+  const npub = nip19.npubEncode(myPubkey);
+  
+  const request = encodePaymentRequest({
+    amount,
+    unit: 'sat',
+    mints: allowedMints,
+    description: 'Payment for services',
+    transport: [
+      {
+        type: PaymentRequestTransportType.NOSTR,
+        target: npub,
+        tags: []
+      }
+    ]
+  });
+  
+  return request; // 'creqA1...'
+}
+```
+
+### QR Code Display
+
+```typescript
+import QRCode from 'react-native-qrcode-svg';
+
+function PaymentRequestQR({ request }: { request: string }) {
+  return (
+    <View>
+      <QRCode 
+        value={request} 
+        size={300}
+        logo={require('./assets/cashu-logo.png')}
+      />
+      
+      <TouchableOpacity onPress={() => {
+        Clipboard.setStringAsync(request);
+      }}>
+        <Text>Copy Payment Request</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+```
+
+## Scan History
+
+Payment requests are saved to scan history:
+
+```typescript
+import { useScanHistoryStore } from 'stores/scanHistoryStore';
+
+const addScan = useScanHistoryStore(state => state.addScan);
+
+// Save payment request scan
+addScan(
+  rawData,           // Original scanned string
+  cleanedData,       // Trimmed/normalized
+  'paymentRequest',  // Type
+  'qr'              // Source: 'qr' | 'paste' | 'deeplink'
+);
+```
+
+## Mint Filtering
+
+When payment request specifies allowed mints, filter the mint list:
+
+```typescript
+import { MintListScreen } from 'components/screens/MintListScreen';
+
+const allowedMints = decoded.mints || [];
+
+<MintListScreen
+  requireBalance={true}
+  minAmount={decoded.amount}
+  allowedMints={allowedMints}  // Only show these mints
+  onMintSelect={(mint) => {
+    // User selected valid mint
+  }}
+/>
+```
+
+The list screen filters internally:
+
+```typescript
+const filteredMints = trustedMints.filter((mint) => {
+  // If allowedMints specified, only include those
+  if (allowedMints && allowedMints.length > 0) {
+    if (!allowedMints.includes(mint.mintUrl)) {
+      return false;
+    }
+  }
+  
+  // Must have sufficient balance
+  if (minAmount && balance[mint.mintUrl] < minAmount) {
+    return false;
+  }
+  
+  return true;
+});
+```
+
+## Nostr Integration
+
+### Sending Payments via DM
+
+Sovran uses NIP-04 encrypted DMs to deliver tokens:
+
+```typescript
+import { useNostrDirectMessage } from 'hooks/useNostrDirectMessage';
+import { nip19 } from 'nostr-tools';
+
+const { sendDirectMessage } = useNostrDirectMessage();
+
+// Extract pubkey from payment request
+const nostrTransport = decoded.transport.find(
+  t => t.type === PaymentRequestTransportType.NOSTR
+);
+
+if (nostrTransport) {
+  // Target might be npub or hex pubkey
+  const recipientPubkey = nostrTransport.target.startsWith('npub')
+    ? nip19.decode(nostrTransport.target).data as string
+    : nostrTransport.target;
+  
+  // Send encrypted DM with token
+  await sendDirectMessage({
+    recipientPubkey,
+    message: token,
+    encrypted: true
+  });
+}
+```
+
+### Receiving Payment Notifications
+
+Listen for incoming DMs with tokens:
+
+```typescript
+import { useSubscribe } from '@nostr-dev-kit/ndk-mobile';
+import { isValidEcashToken } from '@/helper/coco/utils';
+
+const filters = [
+  { kinds: [4], '#p': [myPubkey], limit: 50 } // NIP-04 DMs
+];
+
+const { events } = useSubscribe({ filters });
+
+useEffect(() => {
+  events.forEach((event) => {
+    // Decrypt DM
+    const decrypted = decryptDM(event, myPrivkey);
+    
+    // Check if it's a Cashu token
+    if (isValidEcashToken(decrypted)) {
+      // Show notification
+      showTokenReceivedNotification({
+        sender: event.pubkey,
+        token: decrypted
+      });
+    }
+  });
+}, [events]);
+```
+
+## Currency Screen Integration
+
+When amount is missing, the currency screen handles it:
+
+```typescript
+import { CurrencyScreen } from 'components/screens/CurrencyScreen';
+
+// Route from payment request scanner
+router.navigate('/(send-flow)/currency', {
+  to: 'paymentRequest',
+  paymentRequest: encodedRequest,
+  allowedMints: JSON.stringify(decoded.mints),
+  unit: decoded.unit || 'sat'
+});
+
+// CurrencyScreen allows user to enter amount
+// Then navigates to SendTokenScreen with paymentRequest param
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Validate Allowed Mints">
+    Always check if you have a trusted mint that's in the allowed list before showing confirmation UI:
+    ```typescript
+    const hasValidMint = decoded.mints?.some(url => 
+      trustedMints.some(m => m.mintUrl === url)
+    ) ?? true; // true if no restriction
+    
+    if (!hasValidMint) {
+      Alert.alert('No valid mints', 'You don\'t trust any of the allowed mints');
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle Missing Amount Gracefully">
+    If amount is missing, show an input UI rather than rejecting the request. The requester may want any amount.
+  </Accordion>
+  
+  <Accordion title="Show Transport Method">
+    Display how the payment will be delivered (Nostr DM, HTTP POST, etc.) so users understand where it's going.
+  </Accordion>
+  
+  <Accordion title="Verify Before Sending">
+    Show a confirmation screen with:
+    - Recipient (npub or URL)
+    - Amount and unit
+    - Selected mint
+    - Memo/description
+  </Accordion>
+</AccordionGroup>
+
+## Error Handling
+
+```typescript
+try {
+  const decoded = decodePaymentRequest(data);
+  
+  // Check for Nostr transport
+  const nostrTransport = decoded.transport?.find(
+    t => t.type === PaymentRequestTransportType.NOSTR
+  );
+  
+  if (!nostrTransport) {
+    throw new Error('Only Nostr transport is supported');
+  }
+  
+  // Validate amount
+  if (decoded.amount && decoded.amount <= 0) {
+    throw new Error('Invalid amount');
+  }
+  
+  // Check mint compatibility
+  if (decoded.mints && decoded.mints.length > 0) {
+    const validMints = getValidMints(decoded.mints, decoded.amount);
+    if (validMints.length === 0) {
+      throw new Error('No valid mints available');
+    }
+  }
+  
+} catch (err) {
+  console.error('Payment request error:', err);
+  Alert.alert('Invalid Payment Request', err.message);
+}
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Mint Management" icon="building-columns" href="/cashu/mint-management">
+    Manage allowed mints for payment requests
+  </Card>
+  
+  <Card title="Cashu Overview" icon="coins" href="/cashu/overview">
+    Learn about Cashu protocol fundamentals
+  </Card>
+</CardGroup>

@@ -1,0 +1,528 @@
+---
+title: QR Code Scanner
+description: Camera-based QR scanner with torch, clipboard paste, gallery import, and UR code support
+---
+
+## Overview
+
+Sovran's QR scanner provides a comprehensive interface for scanning payment strings, ecash tokens, Lightning invoices, and more. The scanner supports animated UR codes, clipboard paste, and gallery image import.
+
+## Camera Screen Component
+
+The `CameraScreen` component (`components/screens/CameraScreen.tsx`) provides the core scanning interface:
+
+```typescript
+export interface ScanningData {
+  data: string;
+  /**
+   * Optional source hint for scans.
+   * Common values: 'paste', 'deeplink', 'qr'.
+   */
+  type?: string;
+}
+
+interface CameraScreenProps {
+  onScan: (data: ScanningData) => Promise<void | { urInProgress: boolean; progress?: number }>;
+  onReset?: () => void;
+  scanLocked?: boolean;
+}
+```
+
+From `components/screens/CameraScreen.tsx:34-47`.
+
+## Camera Permission Handling
+
+The `useHandleCameraPermission` hook manages camera access:
+
+```typescript
+export function useHandleCameraPermission() {
+  const [permission, requestPermission] = useCameraPermissions();
+  const [isChecking, setIsChecking] = useState(true);
+
+  const handlePermission = async (): Promise<boolean> => {
+    if (!permission) return false;
+    if (permission.granted) return true;
+
+    if (permission.canAskAgain) {
+      const res = await requestPermission();
+      if (res.granted) {
+        cameraPermissionPopup('granted');
+        return true;
+      }
+    }
+
+    // For both denied and blocked, show error with Open Settings button
+    popup({
+      message: permission.canAskAgain ? 'Camera Permission Denied' : 'Camera Permission Blocked',
+      text: permission.canAskAgain
+        ? 'Camera access is denied. Please enable it in your device settings.'
+        : 'Camera access is blocked. Please enable it in your device settings.',
+      emoji: '🚨',
+      type: 'error',
+      buttons: [{ text: 'Open Settings', onPress: () => Linking.openURL('app-settings:') }],
+    });
+    return false;
+  };
+
+  return { permission, isChecking, handlePermission };
+}
+```
+
+From `hooks/useHandleCameraPermission.ts:8-42`.
+
+## Scanner Features
+
+### Focus Detection
+
+Scanner only processes codes when screen is focused:
+
+```typescript
+const [isFocused, setIsFocused] = useState<boolean>(true);
+const appStateRef = useRef<string>(AppState.currentState);
+
+useFocusEffect(
+  useCallback(() => {
+    setIsFocused(true);
+    setProgress(0);
+    setLoading(false);
+    isProcessingRef.current = false;
+    onReset?.();
+
+    return () => {
+      setIsFocused(false);
+    };
+  }, [onReset])
+);
+
+useEffect(() => {
+  const handleAppStateChange = (nextAppState: string) => {
+    appStateRef.current = nextAppState;
+  };
+
+  const subscription = AppState.addEventListener('change', handleAppStateChange);
+  return () => subscription?.remove();
+}, []);
+```
+
+From `components/screens/CameraScreen.tsx:59-80`.
+
+### Scan Handling
+
+Smart scan processing with UR code support:
+
+```typescript
+const isProcessingRef = useRef<boolean>(false);
+
+const handleScan = useCallback(
+  async (data: ScanningData) => {
+    if (scanLocked) {
+      return;
+    }
+
+    // For UR codes, allow processing even when isProcessingRef is true
+    // to accumulate multiple parts
+    const isUrCode = data.data.toLowerCase().startsWith('ur:');
+
+    if (appStateRef.current !== 'active' || !isFocused) {
+      return;
+    }
+
+    // For non-UR codes, skip if already processing
+    if (!isUrCode && isProcessingRef.current) {
+      return;
+    }
+
+    isProcessingRef.current = true;
+    setLoading(true);
+    try {
+      const result = await onScan(data);
+      // Only reset loading state if UR is not in progress
+      const urInProgress =
+        result && typeof result === 'object' && 'urInProgress' in result
+          ? result.urInProgress
+          : false;
+
+      // Update progress if available
+      if (
+        result &&
+        typeof result === 'object' &&
+        'progress' in result &&
+        typeof result.progress === 'number'
+      ) {
+        setProgress(result.progress);
+      }
+
+      if (!urInProgress) {
+        setLoading(false);
+        setProgress(0);
+        isProcessingRef.current = false;
+      }
+    } catch {
+      setLoading(false);
+      setProgress(0);
+      isProcessingRef.current = false;
+    }
+  },
+  [onScan, isFocused, scanLocked]
+);
+```
+
+From `components/screens/CameraScreen.tsx:82-136`.
+
+### Scanning Overlay
+
+Visual feedback with corner indicators:
+
+```typescript
+const scanBoxSize = screenWidth * 0.8;
+
+<View
+  className="absolute left-1/2 top-1/2"
+  style={{
+    width: scanBoxSize,
+    height: scanBoxSize,
+    transform: [{ translateX: -scanBoxSize / 2 }, { translateY: -scanBoxSize / 2 }],
+  }}>
+  {/* Top-left corner */}
+  <View className="absolute left-0 top-0 h-[30px] w-[30px] border-l-4 border-t-4 border-white shadow-sm shadow-black" />
+
+  {/* Top-right corner */}
+  <View
+    className="absolute right-0 top-0 h-[30px] w-[30px] shadow-sm"
+    style={{
+      borderTopWidth: 4,
+      borderRightWidth: 4,
+      borderColor: 'white',
+    }}
+  />
+
+  {/* Bottom-left corner */}
+  <View
+    className="absolute bottom-0 left-0 h-[30px] w-[30px] shadow-sm"
+    style={{
+      borderBottomWidth: 4,
+      borderLeftWidth: 4,
+      borderColor: 'white',
+    }}
+  />
+
+  {/* Bottom-right corner */}
+  <View
+    className="absolute bottom-0 right-0 h-[30px] w-[30px] shadow-sm"
+    style={{
+      borderBottomWidth: 4,
+      borderRightWidth: 4,
+      borderColor: 'white',
+    }}
+  />
+
+  {/* Progress text */}
+  <View className="absolute bottom-0 self-center rounded-lg bg-black/50 p-2">
+    {progress > 0 ? (
+      <Text className="text-foreground" size={16}>
+        Progress: {Math.round(progress * 100)}%
+      </Text>
+    ) : loading ? (
+      <Text className="text-foreground" size={16}>
+        Loading...
+      </Text>
+    ) : (
+      <Text className="text-foreground" size={16}>
+        Scanning...
+      </Text>
+    )}
+  </View>
+</View>
+```
+
+From `components/screens/CameraScreen.tsx:209-279`.
+
+## Additional Features
+
+### Torch/Flashlight Toggle
+
+```typescript
+const [flashlightOn, setFlashlightOn] = useState<boolean | null>(null);
+
+const toggleFlashlight = useCallback((): void => {
+  setFlashlightOn((prev) => !prev);
+}, []);
+
+const handleCameraReady = useCallback(async (): Promise<void> => {
+  try {
+    setTimeout(() => {
+      setFlashlightOn(false);
+    }, 1000);
+  } catch {
+    // Silent error handling
+  }
+}, []);
+
+<CameraView
+  enableTorch={flashlightOn ?? false}
+  onCameraReady={handleCameraReady}
+  // ...
+/>
+```
+
+From `components/screens/CameraScreen.tsx:138-150, 200`.
+
+### Gallery Import
+
+Scan QR codes from gallery images:
+
+```typescript
+const handleGalleryPress = useCallback(async (): Promise<void> => {
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      quality: 1,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+
+    const scannedCodes = await scanFromURLAsync(result.assets[0].uri, ['qr']);
+
+    if (scannedCodes.length === 0) {
+      noQrCodeFoundPopup();
+      return;
+    }
+
+    const scanning: ScanningData = { data: scannedCodes[0].data, type: 'qr' };
+    await handleScan(scanning);
+  } catch {
+    qrScanFailedPopup();
+  }
+}, [handleScan]);
+```
+
+From `components/screens/CameraScreen.tsx:152-174`.
+
+### Clipboard Paste
+
+Paste payment strings from clipboard:
+
+```typescript
+const handleClipboardPress = useCallback(async (): Promise<void> => {
+  const text = await Clipboard.getStringAsync();
+  if (!text) return;
+
+  const scanning: ScanningData = { data: text, type: 'paste' };
+  await handleScan(scanning);
+}, [handleScan]);
+```
+
+From `components/screens/CameraScreen.tsx:176-182`.
+
+## Platform-Specific Buttons
+
+### iOS - Liquid Glass Buttons
+
+```typescript
+{Platform.OS === 'ios' ? (
+  <>
+    {/* Clipboard */}
+    <Host style={{ height: 52, width: 52 }} matchContents={false}>
+      <SwiftUIButton
+        modifiers={[
+          buttonStyle('glass'),
+          frame({ height: 52, width: 52 }),
+          glassEffect({
+            shape: 'circle',
+            glass: { variant: 'regular', interactive: true },
+          }),
+        ]}
+        onPress={handleClipboardPress}>
+        <SwiftUIHStack alignment="center">
+          <SwiftUIImage systemName="doc.on.clipboard" size={22} color="white" />
+        </SwiftUIHStack>
+      </SwiftUIButton>
+    </Host>
+
+    {/* Gallery */}
+    <Host style={{ height: 52, width: 52 }} matchContents={false}>
+      <SwiftUIButton
+        modifiers={[
+          buttonStyle('glass'),
+          frame({ height: 52, width: 52 }),
+          glassEffect({
+            shape: 'circle',
+            glass: { variant: 'regular', interactive: true },
+          }),
+        ]}
+        onPress={handleGalleryPress}>
+        <SwiftUIHStack alignment="center">
+          <SwiftUIImage systemName="photo" size={22} color="white" />
+        </SwiftUIHStack>
+      </SwiftUIButton>
+    </Host>
+
+    {/* Flashlight */}
+    <Host style={{ height: 52, width: 52 }} matchContents={false}>
+      <SwiftUIButton
+        modifiers={[
+          buttonStyle('glass'),
+          frame({ height: 52, width: 52 }),
+          glassEffect({
+            shape: 'circle',
+            glass: { variant: 'regular', interactive: true },
+          }),
+        ]}
+        onPress={toggleFlashlight}>
+        <SwiftUIHStack alignment="center">
+          <SwiftUIImage
+            systemName={flashlightOn ? 'flashlight.on.fill' : 'flashlight.off.fill'}
+            size={22}
+            color="white"
+          />
+        </SwiftUIHStack>
+      </SwiftUIButton>
+    </Host>
+  </>
+)}
+```
+
+From `components/screens/CameraScreen.tsx:287-357`.
+
+### Android - Blur Buttons
+
+```typescript
+: (
+  <>
+    {/* Android fallback — blur buttons */}
+    <Button
+      onPress={handleClipboardPress}
+      icon={<Icon name="lets-icons:copy" color={foreground} />}
+      blur
+    />
+    <Button
+      onPress={handleGalleryPress}
+      icon={<Icon name="proicons:photo" color={foreground} />}
+      blur
+    />
+    <Button
+      onPress={toggleFlashlight}
+      icon={
+        !flashlightOn ? (
+          <Icon name="mdi:lightbulb-on-outline" color={foreground} />
+        ) : (
+          <Icon name="mdi:lightbulb-on" color={foreground} />
+        )
+      }
+      blur
+    />
+  </>
+)
+```
+
+From `components/screens/CameraScreen.tsx:359-383`.
+
+## UR Code Support
+
+Animated QR codes for large payloads:
+
+```typescript
+import { URDecoder } from '@gandlaf21/bc-ur';
+
+const [urDecoder, setUrDecoder] = useState<URDecoder>(new URDecoder());
+
+if (scanning.data.startsWith('ur:')) {
+  // Don't process if UR is already complete
+  if (urDecoder.isComplete() && urDecoder.isSuccess()) {
+    return { urInProgress: false };
+  }
+
+  const prevPer = urDecoder.getProgress();
+  urDecoder.receivePart(scanning.data);
+  const nextPer = urDecoder.getProgress();
+  onProgress?.(nextPer);
+
+  // Haptic feedback based on progress
+  if (prevPer !== nextPer) {
+    if (nextPer < 0.33) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } else if (nextPer < 0.66) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } else if (nextPer < 1) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  }
+
+  if (urDecoder.isComplete() && urDecoder.isSuccess()) {
+    const ur = urDecoder.resultUR();
+    const decoded = ur.decodeCBOR();
+    const tokenString = new TextDecoder().decode(decoded);
+    
+    // Reset decoder for next scan
+    setUrDecoder(new URDecoder());
+    return { urInProgress: false };
+  }
+
+  return { urInProgress: true, progress: nextPer };
+}
+```
+
+From `hooks/coco/useProcessPaymentString.ts:153-199`.
+
+## Integration with Payment Processing
+
+The scanner delegates payment processing to `useProcessPaymentString`:
+
+```typescript
+const { processPaymentString, reset } = useProcessPaymentString({
+  unit: account.unit,
+  selectedMint,
+  isFocused,
+  onProgress: setProgress,
+  onLoading: setLoading,
+  onScanned: setScanned,
+});
+
+<CameraScreen
+  onScan={processPaymentString}
+  onReset={reset}
+  scanLocked={scanned}
+/>
+```
+
+## Scan Sources
+
+All scans are tracked with source attribution:
+
+- `qr` - Camera QR scan or gallery import
+- `paste` - Clipboard paste
+- `deeplink` - App deep link
+- `nfc` - NFC tap
+
+```typescript
+addScan(scanning.data, trimmedData, 'ecash', source);
+```
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multi-Source Input" icon="layer-group">
+    Camera, clipboard, gallery, and NFC support
+  </Card>
+  
+  <Card title="UR Code Support" icon="film">
+    Animated QR codes for large tokens with progress tracking
+  </Card>
+  
+  <Card title="Smart Processing" icon="microchip">
+    Background state detection and duplicate scan prevention
+  </Card>
+  
+  <Card title="Visual Feedback" icon="eye">
+    Corner indicators, progress bars, and haptic feedback
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Lightning Payments](/features/lightning-payments) - Invoice scanning
+- [Ecash Tokens](/features/ecash-tokens) - Token scanning
+- [NFC Payments](/features/nfc-payments) - NFC integration

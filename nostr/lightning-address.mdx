@@ -1,0 +1,465 @@
+---
+title: 'Lightning Address Username Claiming'
+description: 'Claim human-readable Lightning addresses with NIP-98 authentication'
+---
+
+Sovran allows users to claim memorable Lightning addresses like `username@npubx.cash` or `username@sovran.money` that are permanently linked to their Nostr pubkey.
+
+## Available Domains
+
+Sovran supports two Lightning address domains:
+
+```typescript
+const DOMAINS = [
+  { id: 'npubx', label: 'npubx.cash', value: 'npubx.cash' },
+  { id: 'sovran', label: 'sovran.money', value: 'sovran.money' },
+] as const;
+```
+
+Both domains are managed by the **npub.cash** service, which maps Lightning addresses to Nostr pubkeys.
+
+## Username Requirements
+
+- **Minimum length**: 3 characters
+- **Allowed characters**: Lowercase letters (`a-z`), numbers (`0-9`), underscores (`_`)
+- **No spaces** or special characters
+- **Case-insensitive**: All usernames stored as lowercase
+
+```typescript
+const handleChange = useCallback((text: string) => {
+  // Only allow lowercase letters, numbers, and underscores
+  const sanitized = text.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  onChangeText(sanitized);
+}, [onChangeText]);
+```
+
+## Claim Username Screen
+
+The main UI is in `app/claimUsername.tsx`:
+
+```typescript
+import ClaimUsernameScreen from 'app/claimUsername';
+
+// Navigate to claim screen
+router.navigate('/claimUsername');
+```
+
+### Screen Components
+
+#### Username Input
+
+```typescript
+function UsernameInput({ value, onChangeText, selectedDomain, isChecking }) {
+  return (
+    <View style={styles.inputContainer}>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder="username"
+        autoCorrect={false}
+        autoCapitalize="none"
+        autoFocus
+      />
+      <Text>@{selectedDomain}</Text>
+      {isChecking && <ActivityIndicator />}
+    </View>
+  );
+}
+```
+
+#### Domain Selector
+
+```typescript
+function DomainOption({ domain, isSelected, onSelect, availabilityResult }) {
+  const getStatusInfo = () => {
+    if (!availabilityResult) return null;
+    if (availabilityResult.loading) return { color: muted, text: 'Checking...' };
+    if (availabilityResult.error) return { color: danger, text: availabilityResult.error };
+    if (availabilityResult.available === true) return { color: success, text: 'Available' };
+    if (availabilityResult.available === false) return { color: danger, text: 'Taken' };
+    return null;
+  };
+
+  const status = getStatusInfo();
+
+  return (
+    <TouchableOpacity onPress={onSelect}>
+      <HStack>
+        <Icon name="mingcute:lightning-fill" />
+        <Text>@{domain.label}</Text>
+        {status && (
+          <HStack>
+            {status.icon && <Icon name={status.icon} color={status.color} />}
+            <Text color={status.color}>{status.text}</Text>
+          </HStack>
+        )}
+      </HStack>
+    </TouchableOpacity>
+  );
+}
+```
+
+## Availability Checking
+
+Username availability is checked in real-time across all domains:
+
+```typescript
+const checkAvailability = useCallback(async (name: string) => {
+  if (name.length < 1) {
+    setAvailabilityResults([]);
+    return;
+  }
+
+  setIsChecking(true);
+
+  // Initialize results with loading state
+  const initialResults: AvailabilityResult[] = DOMAINS.map((d) => ({
+    domain: d.value,
+    available: null,
+    loading: true,
+  }));
+  setAvailabilityResults(initialResults);
+
+  // Check all domains in parallel
+  const results = await Promise.all(
+    DOMAINS.map(async (domain) => {
+      try {
+        const result = await checkUsernameAvailability(name, domain.value);
+        return {
+          domain: domain.value,
+          available: result.available,
+          loading: false,
+          error: result.error,
+        };
+      } catch {
+        return {
+          domain: domain.value,
+          available: null,
+          loading: false,
+          error: 'Failed to check',
+        };
+      }
+    })
+  );
+
+  setAvailabilityResults(results);
+  setIsChecking(false);
+}, []);
+```
+
+### Debounced Checking
+
+```typescript
+useEffect(() => {
+  const timer = setTimeout(() => {
+    if (username.length >= 1) {
+      checkAvailability(username);
+    } else {
+      setAvailabilityResults([]);
+    }
+  }, 400); // 400ms debounce
+
+  return () => clearTimeout(timer);
+}, [username, checkAvailability]);
+```
+
+## NIP-98 HTTP Authentication
+
+Claiming a username requires proving ownership of your Nostr pubkey using **NIP-98**:
+
+```typescript
+function generateNip98Auth(url: string, method: string, privateKey: Uint8Array): string {
+  // Create the NIP-98 event structure
+  const authEvent = {
+    content: '',
+    kind: 27235,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ['u', url],
+      ['method', method],
+    ],
+  };
+
+  // Sign the event with the private key
+  const signedEvent = finalizeEvent(authEvent, privateKey);
+
+  // Base64 encode the signed event and prefix with "Nostr "
+  return `Nostr ${btoa(JSON.stringify(signedEvent))}`;
+}
+```
+
+### Example NIP-98 Event
+
+```typescript
+{
+  kind: 27235,
+  content: "",
+  tags: [
+    ["u", "https://npub.cash/api/v1/info/username"],
+    ["method", "PUT"]
+  ],
+  created_at: 1234567890,
+  pubkey: "...",
+  id: "...",
+  sig: "..."
+}
+```
+
+This proves:
+
+- ✅ You control the private key for the pubkey
+- ✅ The request was made recently (via `created_at`)
+- ✅ The request is for a specific URL and method
+
+## Claiming Process
+
+When the user clicks "Continue":
+
+```typescript
+const handleContinue = useCallback(() => {
+  Keyboard.dismiss();
+
+  if (!nostrKeys?.privateKey) {
+    console.error('No Nostr private key available');
+    return;
+  }
+
+  // The URL we're authenticating for (npub.cash API endpoint)
+  const npubCashApiUrl = 'https://npub.cash/api/v1/info/username';
+
+  // Generate NIP-98 auth string for PUT request to npub.cash
+  const nostrAuth = generateNip98Auth(npubCashApiUrl, 'PUT', nostrKeys.privateKey);
+
+  // URL encode the auth string for use as query parameter
+  const encodedAuth = encodeURIComponent(nostrAuth);
+
+  // Navigate to local server with nostr auth as query parameter
+  const localUrl = `http://localhost:8080/api/npubcash-server/username?nostr:authorization=${encodedAuth}`;
+
+  Linking.openURL(localUrl);
+}, [nostrKeys?.privateKey]);
+```
+
+### Local Server Flow
+
+1. **Generate NIP-98 auth**: Sign an event proving pubkey ownership
+2. **Open local URL**: Pass auth to Sovran's local server at `localhost:8080`
+3. **Server forwards**: Local server proxies the request to npub.cash API
+4. **Username claimed**: npub.cash links username to pubkey
+
+<Note>
+The local server pattern allows the mobile app to make authenticated API calls without exposing the private key to third parties.
+</Note>
+
+## Preview Section
+
+Once a username is available, show a preview:
+
+```typescript
+{username.length >= 3 && selectedDomainAvailable && (
+  <View style={styles.previewBox}>
+    <Text size={11} bold>YOUR NEW ADDRESS</Text>
+    <Text size={18} bold style={{ fontFamily: 'monospace' }}>
+      {username}@{selectedDomainLabel}
+    </Text>
+  </View>
+)}
+```
+
+## Integration with npub.cash
+
+### API Endpoint
+
+```
+PUT https://npub.cash/api/v1/info/username
+Authorization: Nostr <base64-encoded-signed-event>
+```
+
+**Request Body**:
+
+```json
+{
+  "username": "alice",
+  "domain": "npubx.cash"
+}
+```
+
+**Response**:
+
+```json
+{
+  "success": true,
+  "username": "alice@npubx.cash",
+  "pubkey": "...",
+  "lnurl": "..."
+}
+```
+
+### Verification
+
+npub.cash verifies the NIP-98 auth event:
+
+1. **Extract event**: Decode base64, parse JSON
+2. **Verify signature**: Check event signature matches pubkey
+3. **Check URL**: Ensure `u` tag matches request URL
+4. **Check method**: Ensure `method` tag matches request method
+5. **Check timestamp**: Reject old events (> 60 seconds)
+
+If all checks pass, the username is claimed and linked to the pubkey.
+
+## Lightning Address Resolution
+
+Once claimed, the Lightning address resolves via LNURL-pay:
+
+```
+https://npubx.cash/.well-known/lnurlp/alice
+```
+
+Returns:
+
+```json
+{
+  "callback": "https://npubx.cash/api/v1/lnurl/alice/callback",
+  "maxSendable": 100000000000,
+  "minSendable": 1000,
+  "metadata": "[[\"text/plain\", \"Pay to alice@npubx.cash\"]]",
+  "tag": "payRequest",
+  "allowsNostr": true,
+  "nostrPubkey": "..."
+}
+```
+
+<Info>
+The `nostrPubkey` field links the Lightning address back to the user's Nostr identity.
+</Info>
+
+## Profile Integration
+
+Claimed Lightning addresses appear in user profiles:
+
+```typescript
+// Profile metadata (kind 0)
+{
+  "lud16": "alice@npubx.cash",
+  "name": "alice",
+  "display_name": "Alice Smith",
+  // ...
+}
+```
+
+Users can:
+
+- **Display** the address in their profile
+- **Receive payments** via Lightning
+- **Share** the address as a QR code
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Validate username before submission">
+    ```typescript
+    const isValid = username.length >= 3 && /^[a-z0-9_]+$/.test(username);
+    if (!isValid) {
+      console.error('Invalid username format');
+      return;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Check availability on all domains">
+    ```typescript
+    const allAvailable = DOMAINS.every(domain => {
+      const result = availabilityResults.find(r => r.domain === domain.value);
+      return result?.available === true;
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Handle NIP-98 auth errors">
+    ```typescript
+    try {
+      const nostrAuth = generateNip98Auth(url, method, privateKey);
+    } catch (error) {
+      console.error('Failed to generate NIP-98 auth:', error);
+      popup({ message: 'Authentication failed', type: 'error' });
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Verify timestamp freshness">
+    ```typescript
+    const now = Math.floor(Date.now() / 1000);
+    const eventAge = now - authEvent.created_at;
+    if (eventAge > 60) {
+      throw new Error('Auth event too old');
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+### NIP-98 Auth Security
+
+- **Short-lived events**: Events expire after 60 seconds
+- **URL binding**: Auth is only valid for specific URL
+- **Method binding**: Auth is only valid for specific HTTP method
+- **Signature verification**: Proves pubkey ownership
+
+### Private Key Protection
+
+- **Never send privateKey over network**: Only send signed events
+- **Use local server**: Proxy requests through localhost:8080
+- **Validate before signing**: Check URL and method before signing
+
+### Username Squatting Prevention
+
+npub.cash may implement:
+
+- **Reputation requirements**: Require minimum follower count or reputation score
+- **Payment requirements**: Charge a small fee to claim premium usernames
+- **Time delays**: Prevent rapid claiming/releasing
+
+## Guidelines Display
+
+When no username is entered, show guidelines:
+
+```typescript
+{username.length === 0 && (
+  <View style={styles.guidelinesBox}>
+    <Text bold size={13}>Username Guidelines</Text>
+    <VStack>
+      {[
+        { text: 'At least 3 characters', icon: 'mdi:check' },
+        { text: 'Lowercase letters, numbers, underscores', icon: 'mdi:check' },
+        { text: 'No spaces or special characters', icon: 'mdi:check' },
+      ].map((item) => (
+        <HStack key={item.text}>
+          <Icon name={item.icon} size={16} />
+          <Text size={13}>{item.text}</Text>
+        </HStack>
+      ))}
+    </VStack>
+  </View>
+)}
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Identity & Keys" icon="key" href="/nostr/identity">
+    NIP-06 key derivation for NIP-98 signing
+  </Card>
+  
+  <Card title="User Profiles" icon="user" href="/nostr/user-profiles">
+    Display claimed Lightning addresses in profiles
+  </Card>
+  
+  <Card title="Lightning Payments" icon="bolt" href="/features/lightning-payments">
+    Send/receive payments to Lightning addresses
+  </Card>
+  
+  <Card title="NIP-98 Spec" icon="book" href="https://github.com/nostr-protocol/nips/blob/master/98.md">
+    Official NIP-98 specification
+  </Card>
+</CardGroup>

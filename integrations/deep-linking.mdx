@@ -1,0 +1,377 @@
+---
+title: 'Deep Linking'
+description: 'Handle cashu:// and sovran:// URL schemes for seamless ecash token imports.'
+icon: 'link'
+---
+
+## Overview
+
+Sovran supports deep linking through custom URL schemes to enable seamless token imports from other apps, websites, and QR codes. The app registers two URL schemes: `cashu://` and `sovran://`.
+
+<Info>
+Deep links are automatically processed when the app is opened from a URL, even if the app wasn't running.
+</Info>
+
+## Supported Schemes
+
+Sovran registers the following URL schemes:
+
+```json
+// From app.json:7
+"scheme": ["sovran", "cashu"]
+```
+
+### cashu://
+
+Standard Cashu protocol scheme for ecash tokens:
+
+```
+cashu://cashuAeyJ0b2tlbiI6W3sicHJvb2ZzIjpbeyJpZCI6IjAwOWExZjI5MzI1M...
+```
+
+### sovran://
+
+Sovran-specific scheme for app-specific deep links:
+
+```
+sovran://cashuAeyJ0b2tlbiI6W3sicHJvb2ZzIjpbeyJpZCI6IjAwOWExZjI5MzI1M...
+```
+
+## Implementation
+
+### Hook Setup
+
+The deep link handler is implemented as a React hook:
+
+```typescript
+// From hooks/useDeeplink.ts:1-47
+import { useEffect } from 'react';
+import * as Linking from 'expo-linking';
+import { useMintStore } from '../stores/mintStore';
+import { useNostrKeysContext } from 'providers/NostrKeysProvider';
+import { deeplinkFailedPopup } from '@/helper/popup';
+import { useProcessPaymentString } from './coco/useProcessPaymentString';
+
+export const useDeeplink = () => {
+  const { keys } = useNostrKeysContext();
+  const selectedMints = useMintStore((state) => state.selectedMints);
+  const selectedMint = keys?.pubkey ? selectedMints[keys.pubkey] : undefined;
+  const url = Linking.useURL();
+
+  const { processPaymentString } = useProcessPaymentString({
+    unit: 'sat',
+    selectedMint,
+    isFocused: true,
+  });
+
+  useEffect(() => {
+    if (!url || !keys?.pubkey) return;
+
+    (async () => {
+      const parsed = Linking.parse(url);
+      const { scheme, hostname } = parsed;
+
+      // Only process cashu:// or sovran:// schemes
+      const isOurScheme = scheme === 'cashu' || scheme === 'sovran';
+      if (!isOurScheme) return;
+
+      // Skip router-handled URLs (e.g., sovran://camera)
+      const isRouterHandled = hostname === 'camera';
+      if (isRouterHandled) return;
+
+      // Process valid deep link
+      const isValidHost = hostname !== null && hostname !== 'expo-development-client';
+      if (isValidHost) {
+        try {
+          await processPaymentString({ data: hostname, type: 'deeplink' });
+        } catch (error) {
+          deeplinkFailedPopup({ 
+            text: error instanceof Error ? error.message : undefined 
+          });
+        }
+      }
+    })();
+  }, [url, keys?.pubkey, selectedMint, processPaymentString]);
+};
+```
+
+### URL Structure
+
+Deep links follow this structure:
+
+```
+scheme://token_data
+├── scheme: "cashu" | "sovran"
+└── hostname: base64-encoded token string
+```
+
+### Processing Flow
+
+<Steps>
+  <Step title="URL Detection">
+    Expo's `Linking.useURL()` hook detects when app is opened from URL
+  </Step>
+  <Step title="Scheme Validation">
+    Check if scheme matches `cashu://` or `sovran://`
+  </Step>
+  <Step title="Route Exclusion">
+    Skip router-handled URLs like `sovran://camera`
+  </Step>
+  <Step title="Token Extraction">
+    Extract token data from URL hostname
+  </Step>
+  <Step title="Processing">
+    Pass to `processPaymentString` for validation and import
+  </Step>
+  <Step title="Error Handling">
+    Show user-friendly popup on failure
+  </Step>
+</Steps>
+
+## URL Parsing
+
+Expo Linking parses URLs into structured data:
+
+```typescript
+const parsed = Linking.parse('cashu://cashuAeyJ0b2tlbiI...');
+// Result:
+{
+  scheme: 'cashu',
+  hostname: 'cashuAeyJ0b2tlbiI...',
+  path: null,
+  queryParams: {}
+}
+```
+
+## Integration with Payment Processing
+
+Deep links use the same payment string processor as QR codes and manual input:
+
+```typescript
+interface ProcessPaymentStringParams {
+  data: string;           // Token string
+  type: 'deeplink' | 'qr' | 'manual';
+}
+
+// From hooks/coco/useProcessPaymentString
+const { processPaymentString } = useProcessPaymentString({
+  unit: 'sat',
+  selectedMint,
+  isFocused: true,
+});
+
+await processPaymentString({ 
+  data: hostname,    // Token data from URL
+  type: 'deeplink'   // Source type
+});
+```
+
+## Platform Configuration
+
+### iOS
+
+URL schemes are registered in Info.plist via app.json:
+
+```json
+// From app.json:7
+"scheme": ["sovran", "cashu"]
+```
+
+This configures:
+- `CFBundleURLTypes` in Info.plist
+- App can be opened from Safari, Messages, etc.
+- Universal links support (optional)
+
+### Android
+
+Intent filters are automatically configured:
+
+```xml
+<!-- Generated from app.json -->
+<intent-filter>
+  <action android:name="android.intent.action.VIEW" />
+  <category android:name="android.intent.category.DEFAULT" />
+  <category android:name="android.intent.category.BROWSABLE" />
+  <data android:scheme="cashu" />
+  <data android:scheme="sovran" />
+</intent-filter>
+```
+
+## Error Handling
+
+Errors during deep link processing show a user-friendly popup:
+
+```typescript
+// From helper/popup.ts
+export function deeplinkFailedPopup({ text }: { text?: string }) {
+  showPopup({
+    title: 'Link Failed',
+    message: text || 'Unable to process this link. Please try again.',
+    buttons: [{ text: 'OK', style: 'default' }]
+  });
+}
+```
+
+Common error scenarios:
+- Invalid token format
+- Unsupported token version
+- Network error contacting mint
+- User wallet not initialized
+
+## Testing Deep Links
+
+### iOS Simulator
+
+```bash
+xcrun simctl openurl booted "cashu://cashuAeyJ0b2tlbiI..."
+```
+
+### Android Emulator
+
+```bash
+adb shell am start -W -a android.intent.action.VIEW -d "cashu://cashuAeyJ0b2tlbiI..."
+```
+
+### Physical Device
+
+Create test QR codes or share links via Messages/WhatsApp.
+
+## Router-Specific Links
+
+Some URLs are handled by the router instead of payment processing:
+
+```typescript
+// Example: Camera deep link
+sovran://camera
+
+// Check in hook:
+const isRouterHandled = hostname === 'camera';
+if (isRouterHandled) return;  // Let router handle it
+```
+
+Router-handled URLs:
+- `sovran://camera` - Open camera screen
+- Future: `sovran://settings`, `sovran://backup`, etc.
+
+## Security Considerations
+
+<Warning>
+Deep links can be triggered by any app or website. Always validate token data before processing.
+</Warning>
+
+### Validation Steps
+
+1. **Scheme Check**: Only process `cashu://` and `sovran://`
+2. **Format Validation**: Ensure token matches expected format
+3. **User Confirmation**: Show preview before importing large amounts
+4. **Mint Verification**: Check mint is trusted before accepting tokens
+
+```typescript
+// Example validation in processPaymentString
+if (!isValidCashuToken(data)) {
+  throw new Error('Invalid token format');
+}
+
+if (amount > LARGE_AMOUNT_THRESHOLD) {
+  const confirmed = await confirmImport(amount);
+  if (!confirmed) return;
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="User Experience">
+    - **Immediate Feedback**: Show processing indicator when link opens app
+    - **Clear Errors**: Provide specific error messages for different failure modes
+    - **Confirmation**: Confirm import before adding tokens to wallet
+    - **State Restoration**: Handle links even when app is backgrounded
+  </Accordion>
+
+  <Accordion title="Error Recovery">
+    - **Validation First**: Validate token format before attempting import
+    - **Network Handling**: Gracefully handle offline/network errors
+    - **User Guidance**: Suggest actions when link processing fails
+    - **Logging**: Log errors for debugging without exposing sensitive data
+  </Accordion>
+
+  <Accordion title="Security">
+    - **Input Validation**: Never trust deep link data without validation
+    - **Rate Limiting**: Prevent abuse by limiting processing frequency
+    - **User Awareness**: Show source/amount before importing
+    - **Safe Defaults**: Default to safest option when uncertain
+  </Accordion>
+</AccordionGroup>
+
+## URL Generation
+
+To create deep links for sharing tokens:
+
+```typescript
+// Example: Generate shareable link
+function generateDeepLink(token: string): string {
+  // cashu:// is the standard protocol
+  return `cashu://${token}`;
+}
+
+// Example usage
+const token = await wallet.send({ amount: 1000, mint });
+const deepLink = generateDeepLink(token);
+
+// Share via native share sheet
+await Share.share({
+  message: deepLink,
+  title: 'Receive Bitcoin',
+});
+```
+
+## Advanced Features
+
+### Query Parameters
+
+Deep links can include query parameters for additional context:
+
+```
+sovran://token?amount=1000&memo=Coffee
+```
+
+```typescript
+const parsed = Linking.parse(url);
+const { amount, memo } = parsed.queryParams;
+```
+
+### Universal Links (iOS)
+
+For better UX, configure universal links (HTTPS URLs that open app):
+
+```json
+// app.json - iOS associated domains
+"ios": {
+  "associatedDomains": ["applinks:sovran.money"]
+}
+```
+
+This allows URLs like `https://sovran.money/receive/token123` to open the app.
+
+## Code Reference
+
+### Source Files
+
+- `hooks/useDeeplink.ts:1-47` - Main deep link handler
+- `app.json:7` - URL scheme registration
+- `hooks/coco/useProcessPaymentString` - Payment string processing
+- `helper/popup.ts` - Error popup utilities
+
+### Key Functions
+
+- `useDeeplink()` - Hook for handling deep links
+- `Linking.useURL()` - React hook for URL detection
+- `Linking.parse(url)` - Parse URL into components
+- `processPaymentString({ data, type })` - Process token data
+- `deeplinkFailedPopup({ text })` - Show error to user
+
+## Related Documentation
+
+- [Cashu Protocol Specification](https://github.com/cashubtc/nuts)
+- [Expo Linking API](https://docs.expo.dev/versions/latest/sdk/linking/)
+- [React Native Deep Linking](https://reactnavigation.org/docs/deep-linking/)

@@ -1,0 +1,290 @@
+---
+title: Wallet Recovery
+description: Restore your Sovran wallet from your BIP-39 seed phrase
+---
+
+Sovran supports full wallet recovery from your 12-word BIP-39 seed phrase. This process contacts all your trusted mints to restore ecash proofs and recover interrupted transactions.
+
+## Recovery Process
+
+<Info>
+  Recovery uses the `restoreMint()` function from the cashu wallet manager to contact each mint and restore your proofs.
+</Info>
+
+### How Recovery Works
+
+<Steps>
+  <Step title="Derive Keys from Seed">
+    Sovran derives your Nostr keys (NIP-06) and Cashu wallet keys (BIP-32) from your mnemonic.
+  </Step>
+  
+  <Step title="Contact Each Mint">
+    For each trusted mint in your configuration, Sovran:
+    - Connects to the mint server
+    - Requests restoration of proofs for your derived keys
+    - Validates and stores recovered tokens
+  </Step>
+  
+  <Step title="Recover Pending Operations">
+    Checks for interrupted send/receive operations and attempts to complete or cancel them.
+  </Step>
+  
+  <Step title="Refresh Balances">
+    Reloads all mint balances to reflect recovered funds.
+  </Step>
+</Steps>
+
+## Using the Recovery Screen
+
+### Accessing Recovery
+
+1. Open **Settings**
+2. Navigate to **Security**
+3. Select **Recover Wallet**
+
+### Recovery Interface
+
+The recovery screen shows:
+
+- **Mint count**: Number of mints to recover from
+- **Progress indicator**: Real-time status for each mint
+- **Results summary**: Success/failure count per mint
+
+<CodeGroup>
+```tsx Recovery Logic (app/settings-pages/recovery.tsx:59-109)
+const handleStartRecovery = async () => {
+  if (mints.length === 0) {
+    setErrorMessage('No mints found to recover from. Add a mint first.');
+    setRecoveryState('error');
+    return;
+  }
+
+  setRecoveryState('recovering');
+  const recoveryResults: RecoveryResult[] = [];
+
+  try {
+    // Restore from each mint
+    for (let i = 0; i < mints.length; i++) {
+      const mint = mints[i];
+      setCurrentMintIndex(i);
+
+      try {
+        await restoreMint(mint.mintUrl);
+        recoveryResults.push({ mint: mint.mintUrl, success: true });
+      } catch (error) {
+        recoveryResults.push({
+          mint: mint.mintUrl,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    // Recover pending send operations
+    const manager = CocoManager.getInstance();
+    await manager.send.recoverPendingOperations();
+
+    // Reload mints/balances
+    await loadMints();
+
+    setRecoveryState('complete');
+  } catch (error) {
+    setErrorMessage(error instanceof Error ? error.message : 'Unknown error');
+    setRecoveryState('error');
+  }
+};
+```
+
+```typescript Restore Mint (hooks/coco/useMintManagement.ts:87-104)
+const restoreMint = async (mintUrl: string) => {
+  setIsLoading(true);
+  setError(null);
+
+  try {
+    await manager.wallet.restore(mintUrl);
+    await loadMints();
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error('Failed to restore mint');
+    setError(error);
+    throw error;
+  } finally {
+    setIsLoading(false);
+  }
+};
+```
+</CodeGroup>
+
+### Recovery States
+
+<Tabs>
+  <Tab title="Idle">
+    Initial state showing:
+    - Number of mints to recover from
+    - What happens during recovery
+    - **Start Recovery** button
+  </Tab>
+  
+  <Tab title="Recovering">
+    Active recovery showing:
+    - Progress indicator for each mint
+    - Current mint being processed
+    - "Please do not close this screen" warning
+    
+    <Warning>Navigation is locked during recovery to prevent data corruption.</Warning>
+  </Tab>
+  
+  <Tab title="Complete">
+    Success screen showing:
+    - Number of mints successfully recovered
+    - Number of failures (if any)
+    - Detailed results per mint
+  </Tab>
+  
+  <Tab title="Error">
+    Error state showing:
+    - Error message
+    - **Try Again** button
+    - **Close** button
+  </Tab>
+</Tabs>
+
+## Recovery Scenarios
+
+### New Device Setup
+
+<Steps>
+  <Step title="Install Sovran">
+    Download and install Sovran on your new device.
+  </Step>
+  
+  <Step title="Import Seed Phrase">
+    Enter your 12-word recovery phrase when prompted during first launch.
+  </Step>
+  
+  <Step title="Add Mints">
+    Re-add the mints you were using (Sovran doesn't know which mints you trusted).
+  </Step>
+  
+  <Step title="Run Recovery">
+    Go to Settings → Security → Recover Wallet to restore your balances.
+  </Step>
+</Steps>
+
+<Info>
+  Your Nostr identity and contacts will also be restored automatically from your seed phrase.
+</Info>
+
+### Partial Recovery
+
+If some mints fail to recover:
+
+- **Network issues**: Check internet connection and retry
+- **Mint offline**: Wait and try again later
+- **Mint shutdown**: Funds may be unrecoverable if mint is permanently offline
+- **Wrong derivation path**: Ensure you're using the same account index
+
+<Warning>
+  Ecash is **mint-specific**. If a mint permanently shuts down, funds held with that mint cannot be recovered.
+</Warning>
+
+## Technical Details
+
+### Key Derivation for Recovery
+
+Recovery uses deterministic key derivation:
+
+```typescript Key Derivation Paths
+// Nostr keys (NIP-06)
+m/44'/1237'/<account>'/0/0
+
+// Cashu wallet (NUT-13 / BIP-32)
+m/44'/129372'/0'/<account>'/0/0
+```
+
+See [Key Derivation](/security/key-derivation) for full technical details.
+
+### Recovery Limitations
+
+<Warning>
+  **What cannot be recovered:**
+  - Settings and preferences (theme, display currency, etc.)
+  - Passcode (must be re-configured)
+  - Mint trust list (must re-add mints)
+  - Transaction labels and notes
+  - Scan history
+</Warning>
+
+<Check>
+  **What can be recovered:**
+  - Nostr identity (npub/nsec)
+  - Cashu wallet balances
+  - Ecash proofs from trusted mints
+  - Pending send/receive operations
+</Check>
+
+## Security Considerations
+
+### Seed Phrase Security
+
+<Warning>
+  Your 12-word seed phrase is the **only** way to recover your wallet. Anyone with access to your seed phrase has full control of your funds.
+</Warning>
+
+**Best practices:**
+- Write seed phrase on paper, never digital storage
+- Store in a secure location (safe, safety deposit box)
+- Never take photos of your seed phrase
+- Never share with anyone, including Sovran support
+- Consider using a metal backup for fire/water resistance
+
+### Recovery Privacy
+
+During recovery:
+
+- Your device contacts each mint server
+- Mints can see your recovery request (but not link to previous activity due to Cashu privacy)
+- No personal information is transmitted
+- All recovered data is stored locally
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Recovery hangs or times out">
+    - Check internet connection
+    - Verify mint URLs are correct
+    - Some mints may be slow; wait or skip and retry
+  </Accordion>
+
+  <Accordion title="Zero balance after recovery">
+    - Ensure you added all mints you previously used
+    - Verify correct account index (default is 0)
+    - Check if mints are still online and operational
+  </Accordion>
+
+  <Accordion title="'No mints found' error">
+    You must manually re-add your trusted mints before running recovery:
+    1. Go to **Mints** tab
+    2. Add each mint URL you previously used
+    3. Return to recovery screen
+  </Accordion>
+
+  <Accordion title="Partial recovery (some mints failed)">
+    This is normal if:
+    - Mint is temporarily offline
+    - Network connectivity issues
+    - Mint URL changed or shutdown
+    
+    Successfully recovered mints will show your balance. Retry failed mints later.
+  </Accordion>
+</AccordionGroup>
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Key Derivation" icon="key" href="/security/key-derivation">
+    How keys are derived from your seed phrase
+  </Card>
+  <Card title="Mint Management" icon="building-columns" href="/cashu/mint-management">
+    Adding and managing trusted mints
+  </Card>
+</CardGroup>

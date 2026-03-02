@@ -1,0 +1,247 @@
+---
+title: Wallet Functionality
+description: Multi-account wallet with real-time balance display, fiat conversion, and ecash token management
+---
+
+## Overview
+
+Sovran's wallet provides a comprehensive interface for managing your ecash balance across multiple currencies and mints. The wallet screen serves as the main hub for viewing balances, monitoring transactions, and accessing payment flows.
+
+## Primary Balance Display
+
+The wallet displays your balance with intelligent unit toggling and multi-currency support.
+
+### Balance Component Architecture
+
+Located in `components/blocks/PrimaryBalance.tsx:144-259`, the primary balance component provides:
+
+- **Real-time balance updates** from `coco-cashu-react` balance context
+- **Multi-unit display** (SAT, BTC, mBTC, USD/EUR/GBP)
+- **Fiat conversion** using live price feeds
+- **Pending/reserved token tracking**
+
+### Unit Toggling
+
+Users can tap the balance to cycle through display modes:
+
+```typescript
+const toggleUnit = useCallback(async () => {
+  await EnhancedHaptics.successHaptic();
+  setDisplayBtc(((displayBtc + 1) % 4) as DisplayBtcMode);
+}, [displayBtc, setDisplayBtc]);
+```
+
+**Display modes:**
+- Mode 0: Satoshis (100,000 sat)
+- Mode 1: Bitcoin (0.001 BTC)
+- Mode 2: Millibitcoin (1 mBTC)
+- Mode 3: Fiat equivalent (≈ $30.00 USD)
+
+### Fiat Currency Support
+
+The wallet supports multiple fiat currencies with live price conversion:
+
+```typescript
+const CURRENCY_CONFIG: Record<DisplayCurrency, { symbol: string; label: string }> = {
+  usd: { symbol: '$', label: 'USD' },
+  eur: { symbol: '€', label: 'EUR' },
+  gbp: { symbol: '£', label: 'GBP' },
+};
+```
+
+Fiat values are calculated using real-time BTC price data:
+
+```typescript
+const fiatValue = btcPrice 
+  ? ((btcPrice / 100_000_000) * balance).toFixed(2) 
+  : '0.00';
+```
+
+## Token State Indicators
+
+### Pending Tokens
+
+The wallet displays pending ecash tokens that haven't been finalized:
+
+```typescript
+const pendingSends = history.filter(
+  (entry): entry is SendHistoryEntry =>
+    entry.type === 'send' && 
+    (entry.state === 'pending' || entry.state === 'prepared')
+);
+const pendingTotal = pendingSends.reduce((sum, tx) => sum + tx.amount, 0);
+```
+
+**Pending pill features:**
+- Shows total amount in pending state
+- Tappable to navigate to filtered transaction list
+- Updates in real-time as transactions finalize
+
+### Reserved Proofs
+
+Reserved proofs represent tokens locked during operations:
+
+```typescript
+<EcashStatusPill
+  label="RESERVED"
+  totalAmount={reservedTotal}
+  unit="sat"
+  sfSymbol="lock.fill"
+  tintColor={warning}
+  onPress={handleReservedPress}
+/>
+```
+
+**Recovery options:**
+1. **Recover Pending Operations** - Checks and recovers stuck operations
+2. **Force Free All Reserved Proofs** - Releases all reserved proofs (destructive)
+
+From `components/blocks/PrimaryBalance.tsx:188-233`:
+
+```typescript
+const handleReservedPress = useCallback(() => {
+  const recoverPending = async () => {
+    const manager = CocoManager.getInstance();
+    await manager.recoverPendingSendOperations();
+    await manager.recoverPendingMeltOperations();
+  };
+
+  const forceFreeAll = async () => {
+    const result = await CocoManager.freeAllReservedProofs();
+    // Shows detailed recovery stats
+  };
+
+  Alert.alert('Reserved Proofs', 'Choose a recovery action.', [
+    { text: 'Close', style: 'cancel' },
+    { text: 'Recover Pending Operations', onPress: recoverPending },
+    { text: 'Force Free All Reserved Proofs', style: 'destructive', onPress: forceFreeAll },
+  ]);
+}, []);
+```
+
+## Account View
+
+The account view (`components/blocks/Account.tsx`) provides:
+
+### Currency Icons
+
+Dynamic currency-specific background icons:
+
+```typescript
+const CURRENCY_ICONS: Record<string, React.FC> = {
+  sat: BitcoinMaskIcon,
+  usd: DollarMaskIcon,
+  eur: EuroMaskIcon,
+  gbp: PoundMaskIcon,
+};
+```
+
+### Page Indicators
+
+Visual dots show the current account in multi-account mode:
+
+```typescript
+<HStack spacing={2}>
+  {accounts.map((acc, index) => {
+    const isActive = acc.unit === account.unit;
+    return (
+      <Text
+        key={index}
+        weight={isActive ? 'bold' : 'regular'}
+        size={16}
+        style={{
+          color: isActive ? foreground : surfaceTertiary,
+        }}>
+        •
+      </Text>
+    );
+  })}
+</HStack>
+```
+
+## Balance Calculation
+
+Balances are sourced from the `coco-cashu-react` balance context:
+
+```typescript
+const { balance: balancesWithTotal } = useBalanceContext();
+const { total: _total, ...availableMints } = balancesWithTotal;
+
+const headerBalance = selectedMint 
+  ? balancesWithTotal[selectedMint] || 0 
+  : 0;
+```
+
+From `app/(drawer)/(tabs)/index/_layout.tsx:44-55`.
+
+## Main Wallet Screen
+
+The main wallet screen (`app/(drawer)/(tabs)/index/index.tsx`) orchestrates:
+
+- **Account pager** for swipeable accounts
+- **Transaction history** with filtering
+- **Monthly statistics** (spent/received)
+- **Bitcoin ATM locator**
+- **Pull-to-refresh** for balance updates
+
+```typescript
+const { history, refresh } = useHistoryWithMelts();
+
+return (
+  <LayoutDebugWrapper
+    refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}>
+    <AccountPagerView accounts={ACCOUNTS} setAccount={setAccount} account={account} />
+    
+    <View className="p-4 pb-24 pt-4">
+      <Transactions account={account} showMore={true} history={history} />
+      <SpentThisMonth history={history} unit={account.unit} />
+      <ReceivedThisMonth history={history} unit={account.unit} />
+      <BitcoinNearYou />
+    </View>
+  </LayoutDebugWrapper>
+);
+```
+
+## Header Integration
+
+The wallet header displays:
+
+- **Selected mint name** with avatar
+- **Mint-specific balance**
+- **Quick access buttons** (menu, NFC payment)
+
+From `app/(drawer)/(tabs)/index/_layout.tsx:56-60`:
+
+```typescript
+const header = useWalletHeaderState({
+  selectedMint,
+  balanceForMint: headerBalance,
+  getMintInfo,
+});
+```
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Real-time Updates" icon="refresh">
+    Balance updates automatically via coco-cashu-react context subscription
+  </Card>
+  
+  <Card title="Multi-currency" icon="globe">
+    Support for SAT, BTC, mBTC, and fiat currencies (USD/EUR/GBP)
+  </Card>
+  
+  <Card title="Token State Tracking" icon="clock">
+    Visual indicators for pending and reserved ecash tokens
+  </Card>
+  
+  <Card title="Recovery Tools" icon="wrench">
+    Built-in tools to recover stuck or reserved proofs
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Multi-Account Support](/features/multi-account) - Account switching and management
+- [Lightning Payments](/features/lightning-payments) - Lightning Network integration
+- [Ecash Tokens](/features/ecash-tokens) - Cashu token handling

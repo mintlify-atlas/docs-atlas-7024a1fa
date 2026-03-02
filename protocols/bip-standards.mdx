@@ -1,0 +1,503 @@
+---
+title: BIP Standards
+description: BIP-39 and BIP-32 implementation for hierarchical deterministic wallets in Sovran
+---
+
+Sovran implements BIP-39 and BIP-32 standards for secure, deterministic wallet generation and recovery.
+
+## BIP-39: Mnemonic Seed Phrases
+
+BIP-39 defines mnemonic sentence generation for deterministic keys.
+
+### Implementation
+
+**Library**: `@scure/bip39`
+
+**Mnemonic Generation** (`helper/secureStorage.ts:80-95`):
+
+```typescript
+import * as bip39 from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english';
+
+async function generateMnemonic(): Promise<string> {
+  try {
+    // Generate 128 bits of entropy (16 bytes) for a 12-word mnemonic
+    const entropy = new Uint8Array(16);
+    crypto.getRandomValues(entropy);
+
+    // Generate mnemonic from entropy
+    const mnemonic = bip39.entropyToMnemonic(entropy, wordlist);
+
+    console.log('Generated new mnemonic');
+    return mnemonic;
+  } catch (error) {
+    console.error('Failed to generate mnemonic:', error);
+    throw new Error('Failed to generate mnemonic');
+  }
+}
+```
+
+**Characteristics**:
+- **12-word phrases**: 128 bits of entropy
+- **English wordlist**: BIP-39 standard English words
+- **Cryptographically secure**: Uses `crypto.getRandomValues()`
+- **Checksum validation**: Built-in error detection
+
+### Secure Storage
+
+**Platform**: `expo-secure-store` with iOS keychain integration
+
+**Storage** (`helper/secureStorage.ts:36-57`):
+
+```typescript
+import * as SecureStore from 'expo-secure-store';
+
+const IOS_SECURE_OPTIONS = {
+  requireAuthentication: false,
+  authenticatePrompt: 'Authenticate to access your Sovran wallet',
+};
+
+export async function storeMnemonic(mnemonic: string): Promise<boolean> {
+  try {
+    if (!mnemonic || typeof mnemonic !== 'string') {
+      throw new Error('Invalid mnemonic provided');
+    }
+
+    // Validate it's a 12-word mnemonic
+    const words = mnemonic.trim().split(' ');
+    if (words.length !== 12) {
+      throw new Error('Mnemonic must be exactly 12 words');
+    }
+
+    const options = Platform.OS === 'ios' ? IOS_SECURE_OPTIONS : {};
+    await SecureStore.setItemAsync(STORAGE_KEYS.USER_MNEMONIC, mnemonic, options);
+
+    return true;
+  } catch (error) {
+    console.error('Failed to store mnemonic:', error);
+    return false;
+  }
+}
+```
+
+**Retrieval** (`helper/secureStorage.ts:63-74`):
+
+```typescript
+export async function retrieveMnemonic(): Promise<string | null> {
+  try {
+    const options = Platform.OS === 'ios' ? IOS_SECURE_OPTIONS : {};
+    const mnemonic = await SecureStore.getItemAsync(STORAGE_KEYS.USER_MNEMONIC, options);
+    return mnemonic;
+  } catch (error) {
+    console.error('Failed to retrieve mnemonic:', error);
+    return null;
+  }
+}
+```
+
+**Security Features**:
+- iOS Keychain integration
+- Biometric authentication support (optional)
+- Platform-specific encryption
+- Secure deletion support
+
+### Mnemonic Initialization
+
+**Provider Integration** (`providers/NostrKeysProvider.tsx:250-292`):
+
+The NostrKeysProvider ensures a mnemonic exists or generates one:
+
+```typescript
+let mnemonicToUse = mnemonic;
+
+// If no mnemonic from secure storage, try Redux fallback first
+if (!mnemonicToUse) {
+  mnemonicToUse = getMnemonicFromRedux();
+
+  if (mnemonicToUse) {
+    // Migrate to SecureStore
+    const { storeMnemonic } = await import('../helper/secureStorage');
+    await storeMnemonic(mnemonicToUse);
+  }
+}
+
+if (!mnemonicToUse) {
+  // Generate new mnemonic
+  mnemonicToUse = await ensureMnemonicExists();
+
+  if (!mnemonicToUse) {
+    throw new Error('Failed to generate or retrieve mnemonic');
+  }
+}
+```
+
+**Migration Support**:
+- Checks SecureStore first
+- Falls back to Redux for legacy wallets
+- Migrates Redux mnemonic to SecureStore automatically
+- Generates new mnemonic if none exists
+
+## BIP-32: Hierarchical Deterministic Wallets
+
+BIP-32 enables deriving multiple keys from a single seed.
+
+### Implementation
+
+**Library**: `@scure/bip32`
+
+### Derivation Paths
+
+Sovran uses separate derivation paths for Nostr and Cashu:
+
+#### Nostr Keys (NIP-06)
+
+**Path**: `m/44'/1237'/<accountIndex>'/0/0`
+
+**Implementation** (`helper/keyDerivation.ts:14-31`):
+
+```typescript
+import * as nip06 from 'nostr-tools/nip06';
+import { nip19 } from 'nostr-tools';
+
+export function deriveNostrKeys(mnemonic: string, accountIndex: number = 0): DerivedNostrKeys {
+  const { privateKey: sk, publicKey: pk } = nip06.accountFromSeedWords(
+    mnemonic,
+    undefined,
+    accountIndex
+  );
+
+  return {
+    npub: nip19.npubEncode(pk),
+    nsec: nip19.nsecEncode(sk),
+    pubkey: pk,
+    privateKey: sk,
+  };
+}
+```
+
+**Coin Type**: 1237 (Nostr)
+**Account Index**: Supports multiple Nostr identities
+
+#### Cashu Mnemonic (NUT-13)
+
+**Path**: `m/44'/129372'/0'/<accountIndex>'/0/0`
+
+**Implementation** (`helper/keyDerivation.ts:36-47`):
+
+```typescript
+import { HDKey } from '@scure/bip32';
+import * as bip39 from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english';
+
+const CASHU_DERIVATION_PREFIX = `m/44'/129372'`;
+
+export function deriveCashuMnemonic(mnemonic: string, accountIndex: number = 0): string {
+  const seed = bip39.mnemonicToSeedSync(mnemonic);
+  const root = HDKey.fromMasterSeed(seed);
+  const path = `${CASHU_DERIVATION_PREFIX}/0'/${accountIndex}'/0/0`;
+  const child = root.derive(path);
+  return bip39.entropyToMnemonic(child.privateKey as Uint8Array, wordlist);
+}
+```
+
+**Process**:
+1. Derive child private key from BIP-32 path
+2. Re-encode 32-byte private key as 24-word BIP-39 mnemonic
+3. Use derived mnemonic for Cashu wallet operations
+
+**Coin Type**: 129372 (Cashu)
+**Output**: 24-word mnemonic for NUT-13 compatibility
+
+#### Wallet Seed Derivation
+
+**From Cashu Mnemonic** (`helper/keyDerivation.ts:52-54`):
+
+```typescript
+export function deriveCashuWalletSeed(cashuMnemonic: string): Uint8Array {
+  return bip39.mnemonicToSeedSync(cashuMnemonic, '');
+}
+```
+
+**Full Chain** (`helper/keyDerivation.ts:60-65`):
+
+```typescript
+export function deriveCashuWalletSeedFromRoot(
+  mnemonic: string,
+  accountIndex: number = 0
+): Uint8Array {
+  return deriveCashuWalletSeed(deriveCashuMnemonic(mnemonic, accountIndex));
+}
+```
+
+**Flow**:
+```
+Root Mnemonic (12 words)
+  ↓ BIP-32 derivation (m/44'/129372'/0'/<accountIndex>'/0/0)
+Cashu Mnemonic (24 words)
+  ↓ BIP-39 to seed
+64-byte Wallet Seed
+```
+
+### Key Caching
+
+Derived keys are cached to avoid expensive re-derivation.
+
+**Cache Structure** (`helper/secureStorage.ts:16-22`):
+
+```typescript
+export interface CachedDerivedKeys {
+  npub: string;
+  nsec: string;
+  pubkey: string;
+  privateKeyHex: string;
+  mnemonicHash: string; // For cache invalidation
+}
+```
+
+**Mnemonic Hash** (`helper/secureStorage.ts:178-185`):
+
+```typescript
+export function hashMnemonic(mnemonic: string): string {
+  let hash = 0;
+  for (let i = 0; i < mnemonic.length; i++) {
+    hash = (hash * 31 + mnemonic.charCodeAt(i)) | 0;
+  }
+  return hash.toString(36);
+}
+```
+
+**Cache Validation** (`providers/NostrKeysProvider.tsx:302-322`):
+
+```typescript
+const mHash = hashMnemonic(mnemonicToUse);
+
+// Try loading cached keys from SecureStore
+const [cachedDerived, cachedCashu] = await Promise.all([
+  retrieveDerivedKeys(defaultAccountIndex),
+  retrieveCashuMnemonic(defaultAccountIndex),
+]);
+
+const cacheValid =
+  cachedDerived?.mnemonicHash === mHash && cachedCashu?.mnemonicHash === mHash;
+
+if (cacheValid && cachedDerived && cachedCashu) {
+  // Use cached keys (fast path)
+  defaultKeys = {
+    npub: cachedDerived.npub,
+    nsec: cachedDerived.nsec,
+    pubkey: cachedDerived.pubkey,
+    privateKey: hexToBytes(cachedDerived.privateKeyHex),
+  };
+  defaultCashuMnemonic = cachedCashu.value;
+} else {
+  // Derive from scratch and cache
+  defaultKeys = deriveNostrKeys(mnemonicToUse, defaultAccountIndex);
+  defaultCashuMnemonic = deriveCashuMnemonicPure(mnemonicToUse, defaultAccountIndex);
+  // Background cache write...
+}
+```
+
+**Benefits**:
+- Fast app startup (skip expensive derivation)
+- Cache invalidation on mnemonic change
+- Per-account caching
+- Background cache updates
+
+### Multi-Account Support
+
+Sovran supports multiple accounts from a single seed.
+
+**Account Management** (`providers/NostrKeysProvider.tsx:185-210`):
+
+```typescript
+const getKeysForAccount = async (accountIndex: number): Promise<NostrKeys | null> => {
+  try {
+    return await deriveKeys(accountIndex);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Failed to get keys for account';
+    setError(errorMessage);
+    return null;
+  }
+};
+
+const getCashuMnemonicForAccount = async (accountIndex: number): Promise<string | null> => {
+  try {
+    return await deriveCashuMnemonic(accountIndex);
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error ? err.message : 'Failed to get cashu mnemonic for account';
+    setError(errorMessage);
+    return null;
+  }
+};
+```
+
+**Profile Store** (`stores/profileStore.ts`):
+
+```typescript
+/** BIP-44 account index used for key derivation */
+accountIndex: number;
+```
+
+Each profile has a unique account index for deterministic key derivation.
+
+## Wallet Recovery
+
+Sovran provides comprehensive wallet recovery from seed phrases.
+
+**Recovery Screen** (`app/settings-pages/recovery.tsx`):
+- Input 12-word seed phrase
+- Restore tokens from all known mints
+- Progress tracking per mint
+
+**Recovery Process** (`hooks/coco/useMintManagement.ts`):
+
+```typescript
+const restoreMint = async (mintUrl: string) => {
+  // 1. Derive Cashu mnemonic from root seed
+  // 2. Derive wallet seed from Cashu mnemonic
+  // 3. Restore proofs from mint using NUT-09
+  // 4. Track progress and display status
+};
+```
+
+**Flow**:
+```
+Seed Phrase Entry
+  ↓
+Validate BIP-39 Mnemonic
+  ↓
+Derive Cashu Mnemonic (per account)
+  ↓
+Restore from Each Mint
+  ↓
+Display Recovered Balance
+```
+
+## Security Best Practices
+
+### Storage Security
+
+<Warning>
+**Never commit or expose**:
+- Mnemonic seed phrases
+- Private keys (nsec, hex)
+- `.env` files with secrets
+- `credentials.json` or similar
+</Warning>
+
+**Implementation** (`helper/secureStorage.ts:24-29`):
+
+```typescript
+const IOS_SECURE_OPTIONS = {
+  requireAuthentication: false, // Set to true in production
+  authenticatePrompt: 'Authenticate to access your Sovran wallet',
+};
+```
+
+<Tip>
+For production builds, enable `requireAuthentication: true` to enforce biometric authentication on iOS.
+</Tip>
+
+### Secure Deletion
+
+**Clear All Data** (`helper/secureStorage.ts:134-163`):
+
+```typescript
+export async function clearAllSecureData(maxAccountIndex: number = 10): Promise<boolean> {
+  try {
+    const keysToDelete: string[] = [
+      STORAGE_KEYS.USER_MNEMONIC,
+      STORAGE_KEYS.MIGRATIONS_COMPLETE_LEGACY,
+    ];
+
+    // Per-account keys for every possible account index
+    for (let i = 0; i <= maxAccountIndex; i++) {
+      keysToDelete.push(migrationsCompleteKey(i), derivedKeysKey(i), cashuMnemonicKey(i));
+    }
+
+    const clearPromises = keysToDelete.map((key) =>
+      SecureStore.deleteItemAsync(key, options).catch((error) => {
+        console.warn(`Failed to clear ${key}:`, error);
+        return false;
+      })
+    );
+
+    await Promise.all(clearPromises);
+    return true;
+  } catch (error) {
+    console.error('Failed to clear secure storage:', error);
+    return false;
+  }
+}
+```
+
+**Clears**:
+- Main mnemonic
+- Derived keys cache (all accounts)
+- Cashu mnemonics cache (all accounts)
+- Migration flags
+
+### Passcode Protection
+
+Additional app-level security layer.
+
+**Implementation** (`app/settings-pages/passcode.tsx`):
+- 4-digit PIN code
+- Custom numeric keyboard
+- Passcode gate on app launch
+- Separate from mnemonic encryption
+
+**Components**:
+- `PasscodeScreen.tsx`: PIN entry interface
+- `NumericKeyboard.tsx`: Custom keyboard
+- `PasscodeGate.tsx`: Authentication gate
+
+## Dependencies
+
+```json
+// package.json:64-65,97
+{
+  "@scure/bip32": "^1.3.3",
+  "@scure/bip39": "^1.2.2",
+  "expo-secure-store": "~55.0.8"
+}
+```
+
+<Info>
+Sovran uses `@scure` libraries for BIP implementation instead of older libraries. These are audited, TypeScript-native, and maintained by the noble-crypto team.
+</Info>
+
+## Reference Implementation
+
+- **Key Derivation**: `helper/keyDerivation.ts`
+- **Secure Storage**: `helper/secureStorage.ts`
+- **Nostr Keys Provider**: `providers/NostrKeysProvider.tsx`
+- **Secure Store Hook**: `hooks/useSecureStore.ts`
+- **Recovery Flow**: `app/settings-pages/recovery.tsx`
+- **Passcode Lock**: `app/settings-pages/passcode.tsx`
+
+## Derivation Path Summary
+
+| Purpose | Path | Output | Standard |
+|---------|------|--------|----------|
+| Nostr Identity | `m/44'/1237'/<account>'/0/0` | npub/nsec pair | NIP-06 |
+| Cashu Wallet | `m/44'/129372'/0'/<account>'/0/0` | 24-word mnemonic | NUT-13 |
+| Cashu Seed | (from Cashu mnemonic) | 64-byte seed | BIP-39 |
+
+## Learn More
+
+<CardGroup cols={2}>
+  <Card title="Nostr NIPs" icon="rss" href="/protocols/nostr-nips">
+    NIP-06 key derivation implementation
+  </Card>
+  <Card title="Cashu NUTs" icon="coins" href="/protocols/cashu-nuts">
+    NUT-13 deterministic wallet derivation
+  </Card>
+  <Card title="BIP-39 Spec" icon="book" href="https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki">
+    Official BIP-39 specification
+  </Card>
+  <Card title="BIP-32 Spec" icon="book" href="https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki">
+    Official BIP-32 specification
+  </Card>
+</CardGroup>

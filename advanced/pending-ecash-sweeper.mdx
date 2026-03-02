@@ -1,0 +1,392 @@
+---
+title: Pending Ecash Sweeper
+description: Reclaim unclaimed sent ecash tokens back to your wallet
+---
+
+## Overview
+
+When you send ecash tokens, they remain in a "pending" state until the recipient claims them. The Pending Ecash Sweeper allows you to rollback (reclaim) these unclaimed tokens back to your wallet.
+
+## Pending Transaction States
+
+### Send States
+
+```typescript app/pendingEcash.tsx
+const pendingSends = useMemo(() => {
+  return history.filter(
+    (entry): entry is SendHistoryEntry =>
+      entry.type === 'send' && (entry.state === 'pending' || entry.state === 'prepared')
+  );
+}, [history]);
+```
+
+**Prepared**: Token created but not yet shared or delivered
+
+**Pending**: Token shared, waiting for recipient to claim
+
+## Pending Ecash Screen
+
+### Grouped by Mint
+
+Pending transactions are organized by mint:
+
+```typescript app/pendingEcash.tsx
+const pendingByMint = useMemo(() => {
+  return _.groupBy(pendingSends, 'mintUrl');
+}, [pendingSends]);
+
+const mintsWithPending = useMemo(
+  () => mints.filter((mint) => (pendingByMint[mint.mintUrl]?.length || 0) > 0),
+  [mints, pendingByMint]
+);
+```
+
+### Mint Tabs
+
+Tabs show pending count and total amount per mint:
+
+```typescript app/pendingEcash.tsx
+function AnimatedMintTab({
+  mint,
+  isSelected,
+  pendingCount,
+  totalAmount,
+  unit,
+  onPress,
+}: AnimatedMintTabProps) {
+  const displayName = mint.mintInfo?.name || extractDomain(mint.mintUrl) || 'Unknown';
+
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
+      <View
+        style={[
+          styles.tabContainer,
+          {
+            backgroundColor: isSelected ? primaryColor700 : primaryColor900,
+            paddingHorizontal: LARGE_PADDING_H,
+            paddingVertical: LARGE_PADDING_V,
+          },
+        ]}>
+        <View style={[styles.tabContent, { gap: LARGE_GAP }]}>
+          <View style={styles.iconContainer}>
+            <Avatar
+              picture={mint.mintInfo?.icon_url || undefined}
+              size={LARGE_ICON_SIZE}
+              variant="mint"
+              name={displayName}
+              alt={`${displayName} icon`}
+            />
+          </View>
+          <VStack>
+            <Animated.Text
+              style={[styles.tabText, { color: primaryColor0, fontSize: LARGE_FONT_SIZE }]}
+              numberOfLines={1}>
+              {displayName}
+            </Animated.Text>
+            <HStack align="center" gap={2}>
+              <AmountFormatter
+                amount={totalAmount}
+                unit={unit}
+                size={10}
+                weight="heavy"
+                color={primaryColor300}
+              />
+              <Text size={10} style={{ color: primaryColor300 }}>
+                • {pendingCount} pending
+              </Text>
+            </HStack>
+          </VStack>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+```
+
+## Rollback Operation
+
+### Individual Rollback
+
+Rollback a single pending transaction:
+
+```typescript
+try {
+  await manager.send.rollback(tx.operationId);
+  successCount++;
+} catch (error) {
+  console.error(`Failed to rollback ${tx.operationId}:`, error);
+  failCount++;
+}
+```
+
+### Bulk Rollback (Sweep)
+
+Rollback all pending transactions for a mint:
+
+```typescript app/pendingEcash.tsx
+const handleSweep = useCallback(async () => {
+  if (isSweeping || displayedTransactions.length === 0) return;
+
+  setIsSweeping(true);
+  let successCount = 0;
+  let failCount = 0;
+
+  for (const tx of displayedTransactions) {
+    // Add to rolling back set to show spinner
+    setRollingBackIds((prev) => new Set(prev).add(tx.operationId));
+
+    try {
+      await manager.send.rollback(tx.operationId);
+      successCount++;
+    } catch (error) {
+      console.error(`Failed to rollback ${tx.operationId}:`, error);
+      failCount++;
+    } finally {
+      // Remove from rolling back set
+      setRollingBackIds((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(tx.operationId);
+        return newSet;
+      });
+    }
+  }
+
+  setIsSweeping(false);
+
+  if (failCount === 0) {
+    rollbackSuccessPopup(
+      { count: successCount },
+      {
+        onClose: () => {
+          router.back();
+        },
+      }
+    );
+  } else {
+    rollbackPartialPopup({
+      success: successCount,
+      failed: failCount,
+      total: displayedTransactions.length,
+    });
+  }
+}, [isSweeping, displayedTransactions, manager]);
+```
+
+## Loading States
+
+Individual transactions show loading state during rollback:
+
+```typescript app/pendingEcash.tsx
+const [rollingBackIds, setRollingBackIds] = useState<Set<string>>(new Set());
+
+{transactions.map((tx) => (
+  <Transaction
+    key={tx.id}
+    historyEntry={tx as HistoryEntry}
+    isLoading={rollingBackIds.has(tx.operationId)}
+  />
+))}
+```
+
+## Hero Card
+
+The pending ecash screen features a hero card showing total pending count:
+
+```typescript app/pendingEcash.tsx
+<PendingEcashCardFrame
+  accentColor={accentColor}
+  backgroundColor={background}
+  highlightColor={surfaceForeground}>
+  <VStack style={{ padding: 18, paddingTop: 52 + topOffset, zIndex: 1 }}>
+    <HStack align="center" gap={10}>
+      <View
+        style={[styles.heroIcon, { backgroundColor: opacity(accentColor, 0.16) }]}>
+        <Icon name="mdi:clock-alert-outline" size={22} color={accentColor} />
+      </View>
+      <VStack>
+        <Text size={18} heavy style={{ color: opacity(foreground, 0.9) }}>
+          Pending Ecash
+        </Text>
+        <Text size={12} style={{ color: opacity(accentColor, 0.7) }}>
+          {pendingSends.length} unclaimed{' '}
+          {pendingSends.length === 1 ? 'token' : 'tokens'}
+        </Text>
+      </VStack>
+    </HStack>
+  </VStack>
+</PendingEcashCardFrame>
+```
+
+## Card Frame
+
+Custom gradient card frame for pending ecash:
+
+```typescript components/blocks/pending/PendingEcashCardFrame.tsx
+const LEFT_ICON = {
+  name: 'mdi:clock-outline',
+  size: 90,
+  style: { top: -18, left: -18, transform: [{ rotate: '-12deg' as const }] },
+} as const;
+
+const RIGHT_ICON = {
+  name: 'mdi:cash-multiple',
+  size: 140,
+  style: { bottom: -34, right: -34, transform: [{ rotate: '14deg' as const }] },
+} as const;
+
+export function PendingEcashCardFrame({
+  accentColor,
+  backgroundColor,
+  highlightColor,
+  children,
+}: {
+  accentColor: string;
+  backgroundColor: string;
+  highlightColor: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <GradientCardFrame
+      accentColor={accentColor}
+      backgroundColor={backgroundColor}
+      highlightColor={highlightColor}
+      leftIcon={LEFT_ICON}
+      rightIcon={RIGHT_ICON}>
+      {children}
+    </GradientCardFrame>
+  );
+}
+```
+
+## Sweep Button
+
+Bottom button shows total amount being reclaimed:
+
+```typescript app/pendingEcash.tsx
+const sweepButton = useMemo(() => {
+  if (!effectiveSelectedMint || displayedTransactions.length === 0) {
+    return undefined;
+  }
+  return (
+    <BottomButtons>
+      <ButtonHandler
+        buttons={[
+          {
+            text: isSweeping
+              ? 'Rolling back...'
+              : `Rollback ${displayedTransactions.length} Pending (${totalPendingAmount} ${totalUnit.toUpperCase()})`,
+            variant: 'primary',
+            icon: 'mdi:broom',
+            loading: isSweeping,
+            disabled: isSweeping || displayedTransactions.length === 0,
+            onPress: async () => {
+              await handleSweep();
+            },
+          },
+        ]}
+      />
+    </BottomButtons>
+  );
+}, [
+  effectiveSelectedMint,
+  displayedTransactions,
+  totalPendingAmount,
+  totalUnit,
+  isSweeping,
+  handleSweep,
+]);
+```
+
+## Empty State
+
+Shown when no pending ecash exists:
+
+```typescript app/pendingEcash.tsx
+{mintsWithPending.length === 0 && (
+  <Animated.View
+    style={[
+      contentAnimStyle,
+      {
+        paddingHorizontal: 16,
+        marginTop: -HEADER_OVERLAP,
+        paddingTop: HEADER_OVERLAP,
+      },
+    ]}>
+    <View style={styles.emptyState}>
+      <Icon name="mdi:check-circle-outline" size={48} color={opacity(foreground, 0.33)} />
+      <Spacer size={12} />
+      <Text size={18} heavy style={{ color: opacity(foreground, 0.8) }}>
+        No Pending Ecash
+      </Text>
+      <Text
+        size={14}
+        style={{
+          color: opacity(foreground, 0.4),
+          textAlign: 'center',
+          marginTop: 4,
+        }}>
+        All your sent ecash has been claimed
+      </Text>
+    </View>
+  </Animated.View>
+)}
+```
+
+## Hero Transition
+
+The pending ecash screen uses hero transitions for smooth navigation:
+
+```typescript app/pendingEcash.tsx
+const heroRef = useRef<RNView>(null);
+
+const handleHeroLayout = useCallback(() => {
+  hero.registerRef('pendingEcash', 'destination', heroRef.current);
+}, [hero]);
+
+const handleClose = useCallback(() => {
+  hero.closePendingEcash();
+}, [hero]);
+
+<RNView
+  ref={heroRef}
+  onLayout={handleHeroLayout}
+  collapsable={false}
+  shouldRasterizeIOS
+  renderToHardwareTextureAndroid
+  style={[
+    styles.heroCard,
+    {
+      borderColor: opacity(accentColor, 0.25),
+      opacity: hero.isHidden('pendingEcash', 'destination') ? 0 : 1,
+      marginTop: -topOffset,
+      paddingTop: topOffset,
+    },
+  ]}>
+  <PendingEcashCardFrame />
+</RNView>
+```
+
+## Use Cases
+
+### Accidental Sends
+
+Reclaim tokens sent by mistake before recipient claims
+
+### Expired Offers
+
+Rollback promotional or time-limited token offers
+
+### Failed Deliveries
+
+Reclaim tokens that couldn't be delivered to recipient
+
+### Wallet Cleanup
+
+Periodically sweep old pending tokens back to active balance
+
+## Best Practices
+
+- Check pending ecash regularly to reclaim unclaimed tokens
+- Wait reasonable time before reclaiming (recipient may be slow to claim)
+- Consider notifying recipient before reclaiming if via Nostr
+- Use sweep feature to reclaim multiple tokens efficiently

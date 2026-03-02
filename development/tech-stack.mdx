@@ -1,0 +1,716 @@
+---
+title: Tech Stack
+description: Technologies and frameworks powering Sovran
+icon: layer-group
+---
+
+Sovran is built with modern React Native technologies and specialized Bitcoin/Nostr libraries. This guide covers the complete technical stack.
+
+## Core Framework
+
+### React Native & Expo
+
+<CardGroup cols={2}>
+  <Card title="React 19.2.0" icon="react">
+    Latest React with concurrent features
+  </Card>
+  <Card title="React Native 0.83.2" icon="mobile">
+    Native iOS and Android support
+  </Card>
+  <Card title="Expo SDK 55" icon="circle-e">
+    Managed workflow with EAS Build
+  </Card>
+  <Card title="Expo Router 55" icon="route">
+    File-based navigation system
+  </Card>
+</CardGroup>
+
+**Key Features**:
+- Typed routes via Expo Router
+- React Compiler enabled for optimizations
+- Metro bundler with Terser minification
+
+## Language & Tooling
+
+### TypeScript
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  }
+}
+```
+
+- **Version**: TypeScript 5.9.2
+- **Configuration**: Extends `expo/tsconfig.base`
+- **Path Aliases**: `@/*` for absolute imports
+- **Strict Mode**: Enabled for type safety
+
+### Build Tools
+
+<CardGroup cols={3}>
+  <Card title="Babel" icon="b">
+    Transpilation with module resolver
+  </Card>
+  <Card title="Metro" icon="m">
+    React Native bundler
+  </Card>
+  <Card title="EAS Build" icon="cloud">
+    Cloud build service
+  </Card>
+</CardGroup>
+
+## UI & Styling
+
+### Styling System
+
+**Uniwind** - Tailwind CSS v4 for React Native
+
+```tsx
+import { View, Text } from 'uniwind';
+
+<View className="flex-1 bg-background p-4">
+  <Text className="text-xl font-bold text-foreground">
+    Styled with Tailwind
+  </Text>
+</View>
+```
+
+**NativeWind** - Used alongside Uniwind for enhanced styling
+
+- Zero-runtime Tailwind for React Native
+- Platform-specific class names
+- Dark mode support
+
+### UI Libraries
+
+<Tabs>
+  <Tab title="HeroUI Native">
+    Primary component library for Sovran
+    
+    ```tsx
+    import { Button, Card } from 'heroui-native';
+    ```
+    
+    - Native-first components
+    - Theme integration
+    - Hero transition animations
+  </Tab>
+  
+  <Tab title="RN Primitives">
+    Low-level accessible primitives
+    
+    ```tsx
+    import { Checkbox } from '@rn-primitives/checkbox';
+    ```
+    
+    - Checkbox component
+    - Accessibility built-in
+  </Tab>
+  
+  <Tab title="Expo UI">
+    Expo's UI component library
+    
+    ```tsx
+    import { View } from '@expo/ui';
+    ```
+  </Tab>
+</Tabs>
+
+### Icons & Graphics
+
+- **Monicon** - Icon system for React Native
+  - Metro integration: `@monicon/metro`
+  - Native icons: `@monicon/native`
+- **Expo Symbols** - SF Symbols support
+- **React Native SVG** - SVG rendering
+
+### Animation
+
+**React Native Reanimated 4.2.1**
+
+```typescript
+// Shared element transitions enabled
+{
+  "reanimated": {
+    "staticFeatureFlags": {
+      "ENABLE_SHARED_ELEMENT_TRANSITIONS": true
+    }
+  }
+}
+```
+
+- Worklets for 60fps animations
+- Hero transitions between screens
+- Gesture-driven interactions via `react-native-gesture-handler`
+
+## State Management
+
+### Zustand (Primary)
+
+```typescript
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const useSettingsStore = create(
+  persist(
+    (set) => ({
+      displayCurrency: 'USD',
+      setDisplayCurrency: (currency) => set({ displayCurrency: currency }),
+    }),
+    {
+      name: 'settings-storage',
+      storage: AsyncStorage,
+    }
+  )
+);
+```
+
+**Features**:
+- Lightweight and fast
+- AsyncStorage persistence
+- Profile-scoped stores
+- TypeScript-first
+
+### Redux (Legacy)
+
+<Warning>
+The app is migrating from Redux to Zustand. Avoid adding new Redux code.
+</Warning>
+
+- `redux` 5.0.1
+- `react-redux` 9.1.2
+- `redux-persist` 6.0.0
+- `redux-thunk` 3.1.0
+
+## Bitcoin & Cashu
+
+### Cashu Protocol
+
+**Coco-Cashu** - Complete Cashu implementation
+
+<CodeGroup>
+```typescript Core
+import { CashuWallet, CashuMint } from 'coco-cashu-core';
+
+// Source of truth for Cashu types and logic
+// Never import from @cashu/cashu-ts directly
+```
+
+```typescript React Hooks
+import { useWallet, useProofs } from 'coco-cashu-react';
+
+// React integration hooks
+```
+
+```typescript Storage
+import { SQLiteStorage } from 'coco-cashu-expo-sqlite';
+
+// Expo SQLite adapter for proof storage
+```
+
+```typescript Plugins
+import { NPCPlugin } from 'coco-cashu-plugin-npc';
+
+// Nostr Payment Code plugin
+```
+</CodeGroup>
+
+**Supported NUTs**:
+- NUT-00 through NUT-13 (Core protocol)
+- NUT-17 (WebSocket subscriptions)
+- NUT-18 (Payment requests)
+- NUT-23 (Backup and restore)
+
+### Bitcoin Utilities
+
+<Tabs>
+  <Tab title="Cryptography">
+    - `@noble/hashes` - Hash functions
+    - `@scure/bip32` - HD key derivation
+    - `@scure/bip39` - Mnemonic generation
+  </Tab>
+  
+  <Tab title="Lightning">
+    - `@gandlaf21/bolt11-decode` - BOLT11 invoice parsing
+    - Lightning Network payment support
+    - Invoice generation and payment
+  </Tab>
+  
+  <Tab title="QR Codes">
+    - `react-native-qrcode-svg` - QR generation
+    - `expo-camera` - QR scanning with `scanFromURLAsync`
+    - `@gandlaf21/bc-ur` - UR code support (multi-frame)
+  </Tab>
+</Tabs>
+
+### Know Your Mint
+
+```typescript
+import { cashu-kym } from 'cashu-kym';
+
+// Audit data from Cashu Auditor
+// Community ratings via Nostr
+// Success rates and swap times
+```
+
+## Nostr Integration
+
+### NDK (Nostr Development Kit)
+
+**@nostr-dev-kit/ndk-mobile** - Mobile-optimized NDK
+
+```typescript
+import NDK from '@nostr-dev-kit/ndk-mobile';
+
+// Nostr relay management
+// Event publishing and subscriptions
+// Profile data fetching
+```
+
+### Nostr Utilities
+
+**nostr-tools 2.10.4**
+
+```typescript
+import { nip19, nip44, nip06 } from 'nostr-tools';
+
+// NIP-04: Encrypted DMs (legacy)
+// NIP-05: DNS-based verification
+// NIP-06: BIP39 → Nostr keys
+// NIP-17: Gift-wrapped DMs
+// NIP-19: Bech32 encoding (npub, nsec, note)
+// NIP-44: Encryption v2
+// NIP-59: Gift wrap protocol
+```
+
+**Implemented NIPs**:
+- NIP-04, NIP-05, NIP-06, NIP-17, NIP-19, NIP-44, NIP-59
+- Kind 38000 events for mint recommendations
+- Social graph for contact discovery
+
+### npubcash SDK
+
+```typescript
+import { npubcash-sdk } from 'npubcash-sdk';
+
+// Lightning address claiming
+// Username availability checking
+// Domain selection (npubx.cash, sovran.money)
+```
+
+## Storage & Persistence
+
+### Secure Storage
+
+**expo-secure-store** - Encrypted keychain storage
+
+```typescript
+import * as SecureStore from 'expo-secure-store';
+
+// BIP-39 mnemonic seeds
+// Nostr private keys (nsec)
+// Cashu wallet seeds
+// Biometric authentication support
+```
+
+### Databases
+
+<Tabs>
+  <Tab title="SQLite">
+    **expo-sqlite** - Local SQL database
+    
+    ```typescript
+    import * as SQLite from 'expo-sqlite';
+    
+    // Cashu proof storage
+    // Transaction history
+    // Mint data caching
+    ```
+  </Tab>
+  
+  <Tab title="AsyncStorage">
+    **@react-native-async-storage/async-storage**
+    
+    ```typescript
+    import AsyncStorage from '@react-native-async-storage/async-storage';
+    
+    // Zustand persistence
+    // Settings storage
+    // Cache management
+    ```
+  </Tab>
+</Tabs>
+
+## Native Features
+
+### Camera & Scanning
+
+**expo-camera 55.0.9**
+
+```typescript
+import { Camera, scanFromURLAsync } from 'expo-camera';
+
+// QR code scanning
+// Photo library QR import
+// Multi-frame UR code support
+// Torch control
+```
+
+### NFC
+
+**react-native-nfc-manager 3.14.12**
+
+```typescript
+import NfcManager, { NfcTech } from 'react-native-nfc-manager';
+
+// NDEF Type 4 Tag protocol
+// Contactless payments
+// NFC tag reading/writing
+```
+
+**Configuration** (app.json):
+```json
+{
+  "selectIdentifiers": [
+    "D2760000850100",
+    "D2760000850101",
+    "5361746f63617368"
+  ]
+}
+```
+
+### Location
+
+**expo-location 55.1.2**
+
+```typescript
+import * as Location from 'expo-location';
+
+// GPS location stamping
+// Transaction location privacy
+// BTCMap nearby merchants
+```
+
+### Other Native APIs
+
+<CardGroup cols={2}>
+  <Card title="Haptics" icon="hand-point-up">
+    `expo-haptics` - Tactile feedback
+  </Card>
+  <Card title="Clipboard" icon="clipboard">
+    `expo-clipboard` - Copy/paste
+  </Card>
+  <Card title="Sharing" icon="share-nodes">
+    `expo-sharing` - Native share sheet
+  </Card>
+  <Card title="Biometrics" icon="fingerprint">
+    Via `expo-secure-store`
+  </Card>
+</CardGroup>
+
+## Maps & Geolocation
+
+### BTCMap Integration
+
+**expo-maps 55.0.9**
+
+```typescript
+import { MapView } from 'expo-maps';
+import Supercluster from 'supercluster';
+
+// Merchant discovery
+// Category filtering
+// Marker clustering (Supercluster)
+// LRU cluster cache (max 3 entries)
+```
+
+**Features**:
+- 24-hour merchant data TTL
+- Viewport-based rendering
+- Efficient clustering algorithm
+
+## AI Integration
+
+### Routstr
+
+**OpenAI SDK 6.9.1**
+
+```typescript
+import OpenAI from 'openai';
+
+// Pay-per-use AI chat
+// Multiple model providers
+// Ecash-funded balance
+// Sats-per-token pricing
+```
+
+**Features**:
+- Session management
+- Model switching
+- Anonymous mode
+- No subscription required
+
+## UI Components & Libraries
+
+### Navigation
+
+<Tabs>
+  <Tab title="React Navigation">
+    - `@react-navigation/native` 7.1.8
+    - `@react-navigation/native-stack` 7.3.16
+    - `@react-navigation/drawer` 7.3.9
+    - `@react-navigation/elements` 2.6.3
+  </Tab>
+  
+  <Tab title="Bottom Sheets">
+    **@gorhom/bottom-sheet 5.2.8**
+    
+    ```typescript
+    import BottomSheet from '@gorhom/bottom-sheet';
+    
+    // Smooth gesture-based sheets
+    // Snap points
+    // Backdrop support
+    ```
+  </Tab>
+  
+  <Tab title="Action Sheet">
+    **@expo/react-native-action-sheet**
+    
+    ```typescript
+    import { useActionSheet } from '@expo/react-native-action-sheet';
+    
+    // Native action sheets
+    // iOS and Android support
+    ```
+  </Tab>
+</Tabs>
+
+### Lists & Data Display
+
+**@legendapp/list** - High-performance virtualized lists
+
+```typescript
+import { List } from '@legendapp/list';
+
+// Virtualized transaction list
+// Date grouping
+// Smooth scrolling
+```
+
+### Visual Effects
+
+<CardGroup cols={2}>
+  <Card title="Blur" icon="droplet">
+    `expo-blur` - Native blur effects
+  </Card>
+  <Card title="Gradient" icon="fill-drip">
+    `expo-linear-gradient` - Linear gradients
+  </Card>
+  <Card title="Liquid Glass" icon="glass-water">
+    `expo-liquid-glass-native` - Glass morphism
+  </Card>
+  <Card title="Image Colors" icon="palette">
+    `react-native-image-colors` - Color extraction
+  </Card>
+</CardGroup>
+
+## Theme System
+
+### Theme Configuration
+
+**37 Built-in Themes**
+
+```typescript
+// themes.ts
+export const themes = [
+  // Color palette themes
+  { name: 'Orange', colors: { ... } },
+  { name: 'Purple', colors: { ... } },
+  
+  // Background image themes
+  { name: 'Nature', backgroundImage: require('...') },
+  // ... 37 total themes
+];
+```
+
+**Features**:
+- Dynamic color system
+- Background image wallpapers  
+- Instant theme switching
+- Dark mode by default
+
+### Styling Utilities
+
+- `class-variance-authority` - Variant-based styling
+- `tailwind-variants` - Tailwind variant utilities
+- `tailwind-merge` - Merge Tailwind classes
+- `clsx` - Class name composition
+- `polished` - Color manipulation
+- `hex-color-opacity` - Hex color with alpha
+
+## Developer Tools
+
+### Code Quality
+
+<Tabs>
+  <Tab title="ESLint">
+    ```json
+    {
+      "extends": [
+        "expo",
+        "prettier"
+      ],
+      "plugins": [
+        "prettier",
+        "unused-imports"
+      ]
+    }
+    ```
+    
+    - `eslint` 9.25.1
+    - `eslint-config-expo`
+    - `eslint-config-prettier`
+    - `eslint-plugin-unused-imports`
+  </Tab>
+  
+  <Tab title="Prettier">
+    ```json
+    {
+      "plugins": [
+        "prettier-plugin-tailwindcss"
+      ]
+    }
+    ```
+    
+    - Auto-formatting
+    - Tailwind class sorting
+  </Tab>
+  
+  <Tab title="Knip">
+    Find unused exports and dependencies:
+    
+    ```bash
+    yarn knip
+    ```
+  </Tab>
+</Tabs>
+
+### Testing
+
+<CardGroup cols={2}>
+  <Card title="Jest" icon="flask">
+    Unit testing with `jest-expo`
+  </Card>
+  <Card title="Maestro" icon="wand-magic-sparkles">
+    E2E UI testing framework
+  </Card>
+</CardGroup>
+
+## Utility Libraries
+
+### General Utilities
+
+- **lodash** - Utility functions
+- **neverthrow** - Result type for error handling
+- **semver** - Semantic versioning
+- **usehooks-ts** - TypeScript React hooks
+- **buffer** - Node.js Buffer API
+- **process** - Process polyfill
+
+### Data Formatting
+
+- **intl** - Internationalization
+- **number-flow-react-native** - Animated numbers
+- **unique-username-generator** - Username generation
+
+## Platform-Specific
+
+### iOS
+
+- **Widgets** - Home screen widgets via `expo-widgets`
+- **SF Symbols** - Via `expo-symbols`
+- **Apple Targets** - Multi-target support via `@bacons/apple-targets`
+
+### Android
+
+- **NFC Permissions** - Configured in `app.json`
+- **Adaptive Icons** - Configured in `app.json`
+
+## Build Configuration
+
+### app.json
+
+```json
+{
+  "expo": {
+    "name": "Sovran",
+    "slug": "sovran",
+    "version": "0.0.61",
+    "scheme": ["sovran", "cashu"],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
+```
+
+### EAS Build Profiles
+
+<Tabs>
+  <Tab title="Development">
+    ```json
+    {
+      "developmentClient": true,
+      "distribution": "internal",
+      "autoIncrement": true
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Preview">
+    ```json
+    {
+      "distribution": "internal",
+      "autoIncrement": true
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Production">
+    ```json
+    {
+      "ios": {
+        "credentialsSource": "remote"
+      },
+      "autoIncrement": true
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="rocket" href="/development/getting-started">
+    Set up your development environment
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/development/project-structure">
+    Understand the codebase organization
+  </Card>
+  <Card title="Scripts Reference" icon="terminal" href="/development/scripts">
+    Complete guide to all available scripts
+  </Card>
+  <Card title="API Reference" icon="code" href="/protocols/cashu-nuts">
+    Explore the API documentation
+  </Card>
+</CardGroup>

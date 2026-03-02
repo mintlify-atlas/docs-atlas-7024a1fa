@@ -1,0 +1,242 @@
+---
+title: Getting Started
+description: Set up your development environment for Sovran
+icon: rocket
+---
+
+Sovran is a React Native + Expo Router Bitcoin ecash wallet built with TypeScript, featuring Cashu protocol integration, Nostr identity, and NFC payments.
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+- **Node.js** (v18 or later recommended)
+- **Yarn** (v1.22.22 or later) - Package manager
+- **Expo CLI** - For running the development server
+- **iOS Simulator** (macOS only) or **Android Emulator**
+- **Git** - For version control
+
+## Installation
+
+Clone the repository and install dependencies:
+
+<CodeGroup>
+```bash yarn
+git clone https://github.com/SovranBitcoin/Sovran.git
+cd Sovran
+yarn install
+```
+
+```bash npm
+git clone https://github.com/SovranBitcoin/Sovran.git
+cd Sovran
+npm install
+```
+</CodeGroup>
+
+### Post-Install
+
+After installation, the `postinstall` script automatically runs `patch-package` to apply any necessary patches to dependencies.
+
+## Development Setup
+
+### Start Development Server
+
+Launch the Expo development server:
+
+<CodeGroup>
+```bash yarn
+yarn start
+```
+
+```bash npm
+npm start
+```
+</CodeGroup>
+
+This opens the Expo developer tools in your terminal, where you can:
+- Press `i` to open iOS simulator
+- Press `a` to open Android emulator
+- Scan the QR code with the Expo Go app on your physical device
+
+### Run on iOS
+
+<CodeGroup>
+```bash yarn
+yarn ios
+```
+
+```bash npm
+npm run ios
+```
+</CodeGroup>
+
+Alternatively, to start the iOS emulator directly:
+
+<CodeGroup>
+```bash yarn
+yarn start:emulator:ios
+```
+
+```bash npm
+npm run start:emulator:ios
+```
+</CodeGroup>
+
+### Run on Android
+
+<CodeGroup>
+```bash yarn
+yarn android
+```
+
+```bash npm
+npm run android
+```
+</CodeGroup>
+
+Alternatively, to start the Android emulator directly:
+
+<CodeGroup>
+```bash yarn
+yarn start:emulator:android
+```
+
+```bash npm
+npm run start:emulator:android
+```
+</CodeGroup>
+
+## Prebuild Native Projects
+
+If you need to regenerate the native iOS and Android projects (after adding native dependencies or plugins):
+
+<CodeGroup>
+```bash yarn
+yarn prebuild
+```
+
+```bash npm
+npm run prebuild
+```
+</CodeGroup>
+
+<Note>
+The `prebuild` command runs `expo prebuild --clean`, which clears existing native folders before generating new ones.
+</Note>
+
+## Code Quality Checks
+
+Before committing any code, ensure all quality checks pass:
+
+### Run All Checks
+
+<CodeGroup>
+```bash yarn
+yarn lint          # ESLint
+yarn type-check    # TypeScript type checking
+yarn pretty:check  # Prettier formatting check
+yarn knip          # Find unused exports/dependencies
+yarn test          # Jest tests
+```
+
+```bash npm
+npm run lint
+npm run type-check
+npm run pretty:check
+npm run knip
+npm test
+```
+</CodeGroup>
+
+<Warning>
+All five checks must pass before committing. This is enforced in the project's contribution guidelines.
+</Warning>
+
+### Format Code
+
+Automatically format your code with Prettier:
+
+<CodeGroup>
+```bash yarn
+yarn pretty
+```
+
+```bash npm
+npm run pretty
+```
+</CodeGroup>
+
+## Environment Configuration
+
+### Secure Storage
+
+Sovran uses `expo-secure-store` for storing sensitive data like:
+- BIP-39 mnemonic seed phrases
+- Nostr private keys (derived via NIP-06)
+- Cashu wallet seeds
+
+No additional configuration is required - secure storage works out of the box on both iOS and Android.
+
+### Deep Linking
+
+The app supports two URL schemes:
+- `cashu://` - For Cashu protocol URLs
+- `sovran://` - For app-specific deep links
+
+These are configured in `app.json` under the `scheme` property.
+
+## Development Best Practices
+
+### Code Structure
+
+Follow the established architecture:
+- **Routes** go in `app/` - keep screens thin, focus on orchestration
+- **UI primitives** go in `components/ui/`
+- **Composed product UI** goes in `components/blocks/`
+- **Reusable hooks** go in `hooks/`
+- **Cashu-specific hooks** go in `hooks/coco/`
+- **Stateless utilities** go in `helper/`
+- **State management** uses Zustand stores in `stores/`
+
+### Before You Code
+
+Read the `.cursor/rules/` documentation before working on specific domains:
+
+| Domain | Documentation |
+|--------|---------------|
+| Popups, toasts, sheets | `.cursor/rules/popup-toast-sheet-guidelines.mdc` |
+| Secure storage, keys | `.cursor/rules/secure-storage-key-derivation.mdc` |
+| Text, typography | `.cursor/rules/text-typography-skeleton-guidelines.mdc` |
+| Theme, colors | `.cursor/rules/theme-system-architecture.mdc` |
+| Zustand stores | `.cursor/rules/zustand-store-scoping.mdc` |
+| Git workflow | `.cursor/rules/git-github-workflow.mdc` |
+
+### Security Guidelines
+
+<Warning>
+Never commit these files:
+- Mnemonics or seed phrases
+- `nsec` or private keys  
+- API tokens or secrets
+- `.env` file contents
+
+Always scan diffs before staging changes.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Project Structure" icon="folder-tree" href="/development/project-structure">
+    Understand the codebase organization
+  </Card>
+  <Card title="Tech Stack" icon="layer-group" href="/development/tech-stack">
+    Learn about the technologies used
+  </Card>
+  <Card title="Scripts Reference" icon="terminal" href="/development/scripts">
+    Complete guide to all available scripts
+  </Card>
+  <Card title="API Reference" icon="code" href="/protocols/cashu-nuts">
+    Explore the API documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,413 @@
+---
+title: Installation
+description: Download and install Sovran on iOS and Android devices
+---
+
+# Installation
+
+Sovran is available for iOS and Android. Follow the instructions below to install on your device.
+
+## Requirements
+
+### iOS
+
+- iOS 13.0 or later
+- iPhone only (iPad not supported)
+- Camera permission for QR code scanning
+- Optional: NFC-capable device for tap-to-pay payments
+
+### Android
+
+- Android 5.0 (API level 21) or later
+- Camera permission for QR code scanning
+- Optional: NFC support for contactless payments
+
+## Download
+
+<CardGroup cols={2}>
+  <Card title="iOS App Store" icon="apple" href="https://sovran.money">
+    Download for iPhone
+  </Card>
+  <Card title="Android Play Store" icon="android" href="https://sovran.money">
+    Download for Android
+  </Card>
+</CardGroup>
+
+<Note>
+Sovran is currently in active development. Check the [GitHub repository](https://github.com/SovranBitcoin/Sovran) for the latest release information and beta builds.
+</Note>
+
+## iOS Installation
+
+### From App Store
+
+<Steps>
+  <Step title="Open App Store">
+    Navigate to the App Store on your iOS device.
+  </Step>
+  
+  <Step title="Search for Sovran">
+    Search for "Sovran Bitcoin Wallet" or use the direct link above.
+  </Step>
+  
+  <Step title="Download and Install">
+    Tap **Get** to download and install. You may need to authenticate with Face ID, Touch ID, or your Apple ID password.
+  </Step>
+  
+  <Step title="Grant Permissions">
+    On first launch, Sovran will request:
+    
+    - **Camera**: Required for scanning QR codes for payments
+    - **Photo Library** (optional): To import QR codes from images
+    - **Location** (optional): For BTCMap merchant discovery and transaction location stamps
+    - **Motion** (optional): For parallax visual effects
+    - **NFC** (optional): For contactless tap-to-pay
+
+    ```json
+    // From app.json — iOS permissions
+    {
+      "NSCameraUsageDescription": "Sovran uses your camera to scan QR codes for payments",
+      "NSPhotoLibraryUsageDescription": "Choose images with QR codes to scan",
+      "NSLocationWhenInUseUsageDescription": "Show nearby merchants and add location to transactions",
+      "NSMotionUsageDescription": "Create subtle parallax and visual effects",
+      "NFCReaderUsageDescription": "Send and receive contactless payments"
+    }
+    ```
+  </Step>
+</Steps>
+
+### Development Build (TestFlight)
+
+For beta testing or development builds:
+
+```bash
+# Build iOS for development using EAS
+yarn build:dev:ios
+
+# Submit to App Store
+yarn submit:ios
+```
+
+<Warning>
+Development builds are not available in the App Store. Use EAS Build for internal testing or TestFlight distribution.
+</Warning>
+
+## Android Installation
+
+### From Play Store
+
+<Steps>
+  <Step title="Open Play Store">
+    Navigate to Google Play Store on your Android device.
+  </Step>
+  
+  <Step title="Search for Sovran">
+    Search for "Sovran Bitcoin Wallet" or use the direct link above.
+  </Step>
+  
+  <Step title="Install">
+    Tap **Install** to download and install the app.
+  </Step>
+  
+  <Step title="Grant Permissions">
+    On first launch, grant the following permissions:
+    
+    - **Camera**: Required for QR code scanning
+    - **NFC** (optional): For contactless payments
+
+    ```json
+    // From app.json — Android permissions
+    {
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.NFC"
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+### APK Installation
+
+For direct APK installation (advanced users):
+
+```bash
+# Build Android APK for preview
+yarn build:android:apk
+
+# Submit to Play Store
+yarn submit:android
+```
+
+<Note>
+Direct APK installation requires enabling "Install from Unknown Sources" in your Android settings. This is not recommended for most users.
+</Note>
+
+## Building from Source
+
+Advanced users can build Sovran from source code.
+
+### Prerequisites
+
+```bash
+# Required tools
+- Node.js 18 or later
+- Yarn 1.22.22 or later
+- Expo CLI
+- Xcode (iOS) or Android Studio (Android)
+```
+
+### Clone and Install
+
+```bash
+# Clone the repository
+git clone https://github.com/SovranBitcoin/Sovran.git
+cd Sovran
+
+# Install dependencies
+yarn install
+
+# Apply patches
+yarn postinstall
+```
+
+### Development
+
+```bash
+# Start Expo development server
+yarn start
+
+# Run on iOS simulator
+yarn ios
+
+# Run on Android emulator
+yarn android
+
+# Run on physical device
+yarn start:emulator:ios    # iOS
+yarn start:emulator:android # Android
+```
+
+### Code Quality Checks
+
+Before committing, ensure all checks pass:
+
+```bash
+# Run all checks
+yarn lint          # ESLint
+yarn type-check    # TypeScript
+yarn pretty:check  # Prettier formatting
+yarn knip          # Find unused exports/dependencies
+yarn test          # Jest tests
+```
+
+<Warning>
+All five checks must pass before any commit. See `.cursor/rules/git-github-workflow.mdc` for full git workflow requirements.
+</Warning>
+
+### Production Builds
+
+```bash
+# Prebuild native projects
+yarn prebuild
+
+# Build for iOS (production)
+yarn build:ios
+
+# Build for Android (APK preview)
+yarn build:android:apk
+```
+
+## Configuration
+
+### App Metadata
+
+From `app.json`:
+
+```json
+{
+  "expo": {
+    "name": "Sovran",
+    "slug": "sovran",
+    "version": "0.0.61",
+    "scheme": ["sovran", "cashu"],
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.sovranbitcoin",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.sovranbitcoin",
+      "versionCode": 2
+    }
+  }
+}
+```
+
+### Deep Link Schemes
+
+Sovran supports two URI schemes for deep linking:
+
+- `sovran://` - Sovran-specific deep links
+- `cashu://` - Cashu token standard
+
+```typescript
+// File: hooks/useDeeplink.ts
+// Processes cashu:// and sovran:// URLs
+// Automatically routes to appropriate screen
+```
+
+## Post-Installation
+
+### First Launch
+
+On first launch, Sovran will:
+
+1. Generate a BIP-39 seed phrase
+2. Store it securely using `expo-secure-store`
+3. Derive Nostr keys via NIP-06
+4. Show terms and conditions
+5. Present onboarding carousel
+
+```typescript
+// File: components/blocks/AppGate.tsx
+// Gate order: Terms → Onboarding → Keys → App
+```
+
+### Data Storage
+
+Sovran stores data locally:
+
+- **Secure Store**: Seed phrase, Nostr private keys (encrypted)
+- **AsyncStorage**: Settings, preferences, transaction history
+- **SQLite**: Cashu proofs and wallet state (via coco-cashu-expo-sqlite)
+
+```typescript
+// From package.json
+{
+  "dependencies": {
+    "expo-secure-store": "~55.0.8",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo-sqlite": "~55.0.10",
+    "coco-cashu-expo-sqlite": "1.1.2-rc.47"
+  }
+}
+```
+
+<Note>
+All data is stored locally on your device. Sovran does not transmit your seed phrase, private keys, or transaction data to any server.
+</Note>
+
+## Troubleshooting
+
+### iOS Installation Issues
+
+**Error: "Untrusted Developer"**
+
+If installing a development build:
+1. Go to **Settings** → **General** → **VPN & Device Management**
+2. Trust the developer certificate
+
+**Camera Permission Denied**
+
+1. Go to **Settings** → **Sovran**
+2. Enable **Camera** permission
+
+### Android Installation Issues
+
+**Error: "App not installed"**
+
+- Ensure you have enough storage space
+- Check that "Install from Unknown Sources" is enabled (APK only)
+- Uninstall any previous versions first
+
+**NFC Not Working**
+
+Some Android devices require:
+1. **Settings** → **Connected devices** → **Connection preferences**
+2. Enable **NFC**
+
+### Build Issues
+
+**Metro bundler errors**
+
+```bash
+# Clear Metro cache
+npx expo start --clear
+
+# Reset node_modules
+rm -rf node_modules
+yarn install
+```
+
+**Native build errors**
+
+```bash
+# Clean prebuild
+yarn prebuild --clean
+
+# iOS: Clean build folder
+cd ios && xcodebuild clean && cd ..
+
+# Android: Clean gradle
+cd android && ./gradlew clean && cd ..
+```
+
+## System Requirements
+
+### Minimum Hardware
+
+- **RAM**: 2GB minimum, 4GB recommended
+- **Storage**: 200MB for app, additional space for transaction data
+- **Network**: Internet connection required for Lightning payments and Nostr features
+
+### Supported Features by Platform
+
+| Feature | iOS | Android |
+|---------|-----|--------|
+| Cashu Ecash | ✅ | ✅ |
+| Lightning | ✅ | ✅ |
+| Nostr DMs | ✅ | ✅ |
+| NFC Payments | ✅ | ✅ |
+| QR Scanning | ✅ | ✅ |
+| Biometric Lock | ✅ | ✅ |
+| Background Fetch | ✅ | Limited |
+
+## Version Information
+
+From `package.json`:
+
+```json
+{
+  "name": "Sovran",
+  "version": "1.0.0",
+  "dependencies": {
+    "expo": "^55.0.4",
+    "react-native": "0.83.2",
+    "coco-cashu-core": "^1.1.2-rc.47",
+    "@nostr-dev-kit/ndk-mobile": "^0.2.2"
+  }
+}
+```
+
+**Current Version**: 0.0.61 (build 1 for iOS, versionCode 2 for Android)
+
+## Next Steps
+
+After installation, proceed to the [Quick Start Guide](/quickstart) to set up your wallet and make your first payment.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="bolt" href="/quickstart">
+    Set up your wallet in minutes
+  </Card>
+  <Card title="Security Guide" icon="shield" href="/security/overview">
+    Learn how to keep your Bitcoin safe
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/SovranBitcoin/Sovran/issues">
+    Report bugs or request features
+  </Card>
+  <Card title="Community" icon="users" href="https://sovran.money">
+    Join the Sovran community
+  </Card>
+</CardGroup>

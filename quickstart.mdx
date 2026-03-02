@@ -1,80 +1,282 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start Guide
+description: Get started with Sovran in minutes — download, setup, and make your first payment
 ---
 
-## Get started in three steps
+# Quick Start Guide
 
-Get your documentation site running locally and make your first customization.
+Get up and running with Sovran in just a few minutes. This guide walks you through downloading the app, creating your wallet, and making your first Bitcoin payment.
 
-### Step 1: Set up your local environment
+## Overview
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Sovran is a mobile Bitcoin wallet that uses Cashu ecash for instant, private payments. Here's what you'll do:
+
+<Steps>
+  <Step title="Download the App">
+    Install Sovran from the App Store (iOS) or Play Store (Android). See the [Installation](/installation) page for detailed instructions and links.
+  </Step>
+
+  <Step title="Accept Terms and Complete Onboarding">
+    On first launch, you'll be presented with:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    1. **Terms & Conditions**: Review and accept to continue
+    2. **Onboarding Carousel**: Learn about Sovran's key features:
+       - Bitcoin that feels like cash with ecash bearer tokens
+       - Powered by Nostr, a decentralized network
+       - Privacy by design with blind signatures
+       - Stay private, stay sovereign
 
-### Step 2: Deploy your changes
+    The onboarding screen features an interactive carousel. Swipe through the slides or tap to advance. When ready, swipe up to reveal the "Get Started" button.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    <Note>
+    Your BIP-39 seed phrase is automatically generated on first launch and stored securely using `expo-secure-store` with biometric support.
+    </Note>
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Explore Your Wallet">
+    After onboarding, you'll see the main wallet interface:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```typescript
+    // File: app/(drawer)/(tabs)/index/index.tsx
+    // The wallet tab shows:
+    - Balance display with sats/fiat toggle
+    - Account pager (swipeable multi-account view)
+    - Send/Receive/Scan buttons
+    - Transaction history with filters
+    ```
 
-### Step 3: Go live
+    **Key Components**:
+    - **Balance Toggle**: Tap to switch between sats, USD, EUR, or GBP
+    - **Account Pager**: Swipe left/right to view different accounts
+    - **Quick Actions**: Send, Receive, and Scan buttons for easy access
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Backup Your Seed Phrase">
+    **Critical**: Your seed phrase is your wallet. Without it, you cannot recover your funds.
 
-## Next steps
+    1. Open the drawer menu (swipe from left edge or tap menu icon)
+    2. Navigate to **Settings**
+    3. Go to **Recovery** settings
+    4. View and securely store your 12-word BIP-39 seed phrase
 
-Now that you have your docs running, explore these key features:
+    <Warning>
+    Write down your seed phrase on paper. Never share it with anyone. Never store it digitally (screenshots, cloud storage, etc.). Anyone with your seed phrase can steal your Bitcoin.
+    </Warning>
+
+    Your seed phrase is used for:
+    - Recovering ecash proofs from all known mints
+    - Deriving your Nostr identity via NIP-06
+    - Restoring pending send operations
+  </Step>
+
+  <Step title="Add a Mint">
+    Before you can receive Bitcoin, you need to add at least one Cashu mint:
+
+    1. Tap the **Wallet** header to open the mint selector
+    2. Select **Add Mint** or browse discovered mints
+    3. Choose from:
+       - **Community-recommended mints** via Nostr (kind 38000 events)
+       - **Sovran-curated mints** from the Sovran API
+       - **Custom mint URL** (paste any Cashu mint URL)
+
+    ```typescript
+    // File: app/(mint-flow)/add.tsx
+    // Mints discovered via:
+    - useNostrDiscoveredMints() // Nostr kind 38000
+    - useSovranDiscoveredMints() // Sovran API
+    ```
+
+    Each mint shows its **KYM score** (Know Your Mint) with:
+    - Lightning node connectivity status
+    - Success rates for swaps
+    - Average swap times
+    - Community ratings
+
+    <Note>
+    Multi-mint architecture is a core security feature. Distribute your balance across multiple mints to reduce custodial risk.
+    </Note>
+  </Step>
+
+  <Step title="Receive Your First Payment">
+    Now you're ready to receive Bitcoin:
+
+    ### Option A: Lightning Invoice
+
+    1. Tap **Receive** on the wallet screen
+    2. On the **Lightning** tab, tap **Fixed Amount**
+    3. Enter the amount in sats
+    4. Share the generated BOLT11 invoice via QR code or copy to clipboard
+
+    ```typescript
+    // File: components/screens/ReceiveScreen.tsx
+    // The receive screen supports:
+    - Lightning invoices (BOLT11)
+    - P2PK locking keys (if Quick Access enabled)
+    - NPC mint URLs for Lightning addresses
+    ```
+
+    ### Option B: Cashu Token
+
+    To receive ecash directly from another Sovran user:
+
+    1. Have the sender create an ecash token
+    2. Receive via:
+       - **QR Code**: Tap **Scan** and scan their QR
+       - **NFC**: Enable NFC and tap devices together
+       - **Paste**: Copy token from clipboard and paste
+       - **Deep Link**: Open `cashu://` or `sovran://` URL
+
+    The token is automatically detected and claimed to your wallet.
+  </Step>
+
+  <Step title="Send Your First Payment">
+    To send Bitcoin from Sovran:
+
+    ### Pay a Lightning Invoice
+
+    1. Tap **Send** or **Scan**
+    2. Scan a BOLT11 Lightning invoice QR code, or paste from clipboard
+    3. Review the payment details (amount, mint, fees)
+    4. Confirm to send
+
+    ```typescript
+    // File: hooks/coco/useProcessPaymentString.ts
+    // Sovran processes multiple payment formats:
+    - BOLT11 Lightning invoices
+    - Cashu ecash tokens
+    - Payment requests (NUT-18)
+    - cashu:// and sovran:// deep links
+    ```
+
+    ### Send Ecash to Another User
+
+    1. Tap **Send**
+    2. Select **Create Token**
+    3. Choose amount and mint
+    4. Share via:
+       - QR code (recipient scans)
+       - NFC tap (contactless)
+       - Copy to clipboard (paste into messaging app)
+       - Encode with emojis (creative sharing)
+
+    <Note>
+    Every transaction is tracked with its source (QR scan, NFC tap, clipboard paste, or deep link) visible in your transaction history.
+    </Note>
+  </Step>
+</Steps>
+
+## Next Steps
+
+Now that you've completed the basics, explore more advanced features:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Claim Lightning Address" icon="at" href="/nostr/lightning-address">
+    Get a custom username@npubx.cash or username@sovran.money Lightning address
+  </Card>
+  <Card title="Nostr Messaging" icon="message" href="/nostr/direct-messages">
+    Send encrypted messages and Cashu tokens via Nostr DMs (NIP-17)
+  </Card>
+  <Card title="Multi-Mint Management" icon="coins" href="/cashu/overview">
+    Distribute your balance and rebalance across mints automatically
+  </Card>
+  <Card title="NFC Payments" icon="wifi" href="/features/nfc-payments">
+    Enable tap-to-pay contactless payments
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Common Tasks
+
+### Switch Display Currency
+
+Tap the **currency pill** in the header to switch between USD, EUR, GBP, or sats. Real-time fiat conversion uses cached BTC price data.
+
+```typescript
+// File: stores/settingsStore.ts — displayCurrency setting
+// File: stores/pricelistStore.ts — BTC price cache
+```
+
+### Filter Transactions
+
+From the wallet screen:
+
+1. Tap **Filter** icon
+2. Filter by:
+   - Currency (BTC, Lightning, ecash)
+   - Payment type
+   - Direction (sent/received)
+   - Status (pending, complete, cancelled)
+   - Month (horizontal month selector)
+
+```typescript
+// File: app/(filter-flow)/filters.tsx
+// File: components/blocks/Transactions.tsx
+```
+
+### Set a Passcode
+
+Protect your wallet with a 4-digit PIN:
+
+1. Go to **Settings** → **Passcode**
+2. Enter your desired 4-digit PIN
+3. Confirm the PIN
+
+The passcode gate appears on app launch.
+
+```typescript
+// File: app/settings-pages/passcode.tsx
+// File: components/blocks/PasscodeGate.tsx
+```
+
+## Troubleshooting
+
+### I Can't Receive Payments
+
+- Ensure you've added at least one mint
+- Check that the mint is online (audit data in mint info)
+- Verify the Lightning invoice amount is within mint limits
+
+### Transaction Stuck as Pending
+
+If a Lightning payment is pending:
+
+1. Tap the transaction to view details
+2. Use the **Refresh** button to check status
+3. The transaction timeline shows each step's progress
+
+```typescript
+// File: components/blocks/Transaction/HistoryEntryTimeline.tsx
+```
+
+For ecash sends, you can rollback pending tokens:
+
+1. Go to **Explore** tab
+2. Tap **Pending Ecash** card
+3. Review pending sends and rollback to reclaim tokens
+
+### Lost Access to My Wallet
+
+If you lose your device:
+
+1. Install Sovran on a new device
+2. Skip onboarding to access settings
+3. Go to **Settings** → **Recovery**
+4. Enter your 12-word seed phrase
+5. Start recovery to sweep all mints
+
+```typescript
+// File: app/settings-pages/recovery.tsx
+// Recovery process:
+- Contacts each mint to restore proofs
+- Recovers interrupted transactions
+- May take several minutes
+```
+
+<Warning>
+Recovery only works if you have your seed phrase. There is no other way to restore your funds.
+</Warning>
+
+## Learn More
+
+- **[Installation Guide](/installation)**: Detailed setup for iOS and Android
+- **[Security Model](/security)**: How Sovran protects your privacy
+- **[GitHub Repository](https://github.com/SovranBitcoin/Sovran)**: Source code and issues

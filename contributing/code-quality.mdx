@@ -1,0 +1,382 @@
+---
+title: Code Quality
+description: Code quality requirements - linting, type checking, formatting, dead code detection, and testing
+---
+
+## Quality Gate
+
+<Warning>
+  **All five checks must pass before any commit.**
+</Warning>
+
+Run these commands before committing:
+
+```bash
+npm run lint          # ESLint
+npm run type-check    # tsc --noEmit
+npm run pretty:check  # Prettier check
+npm run knip          # Dead code detection
+npm test              # Jest
+```
+
+If any check fails, fix the issues and verify again. Only claim what you actually ran.
+
+## Linting
+
+### Run ESLint
+
+```bash
+npm run lint
+```
+
+ESLint checks for:
+- Code style violations
+- Unused imports
+- Common programming errors
+- React/React Native best practices
+
+### Configuration
+
+ESLint is configured with:
+- `eslint-config-expo` - Expo's recommended config
+- `eslint-config-prettier` - Disables rules that conflict with Prettier
+- `eslint-plugin-prettier` - Runs Prettier as an ESLint rule
+- `eslint-plugin-unused-imports` - Detects and removes unused imports
+
+<Tip>
+  The linter will auto-fix many issues. Check the output for remaining manual fixes.
+</Tip>
+
+## Type Checking
+
+### Run TypeScript Compiler
+
+```bash
+npm run type-check
+```
+
+This runs `tsc --noEmit` to check TypeScript types without generating output files.
+
+### Common Type Errors
+
+<AccordionGroup>
+  <Accordion title="Missing imports from coco-cashu-core">
+    Always import types from `coco-cashu-core`, never redefine them.
+    
+    ```typescript
+    // ✅ Correct
+    import { Proof, MintKeys } from 'coco-cashu-core';
+    
+    // ❌ Wrong - don't redefine coco types
+    type Proof = { amount: number; secret: string };
+    ```
+  </Accordion>
+  
+  <Accordion title="Importing from @cashu/cashu-ts">
+    Import from coco, not the underlying `@cashu/cashu-ts` library.
+    
+    ```typescript
+    // ✅ Correct
+    import { Proof } from 'coco-cashu-core';
+    
+    // ❌ Wrong
+    import { Proof } from '@cashu/cashu-ts';
+    ```
+  </Accordion>
+  
+  <Accordion title="Store type errors">
+    Check `.cursor/rules/zustand-store-scoping.mdc` for store type patterns and scoping rules.
+  </Accordion>
+</AccordionGroup>
+
+## Code Formatting
+
+### Check Formatting
+
+```bash
+npm run pretty:check
+```
+
+### Auto-Fix Formatting
+
+```bash
+npm run pretty
+```
+
+Prettier formats:
+- JavaScript/TypeScript files (`.js`, `.jsx`, `.ts`, `.tsx`)
+- JSON files
+- Module formats (`.mjs`, `.cjs`)
+
+### Configuration
+
+Prettier is configured with:
+- `prettier-plugin-tailwindcss` - Automatically sorts Tailwind classes
+
+<Tip>
+  Most editors can auto-format on save. Configure your editor to run Prettier automatically.
+</Tip>
+
+## Dead Code Detection
+
+### Run Knip
+
+```bash
+npm run knip
+```
+
+Knip finds:
+- Unused exports
+- Unused dependencies in `package.json`
+- Unreferenced files
+- Duplicate exports
+
+### What to do with Knip results
+
+<Steps>
+  <Step title="Review the output">
+    Knip will list unused exports, files, and dependencies.
+  </Step>
+  
+  <Step title="Verify before deleting">
+    Some exports may be used by external tools or in ways Knip can't detect. Verify before removing.
+  </Step>
+  
+  <Step title="Remove dead code">
+    Delete genuinely unused code. Keep the codebase lean.
+  </Step>
+</Steps>
+
+## Testing
+
+### Run Tests
+
+```bash
+npm test
+```
+
+This runs the Jest test suite.
+
+### Test Configuration
+
+Tests use:
+- `jest` - Testing framework
+- `jest-expo` - Expo-specific Jest preset
+- `@types/jest` - TypeScript definitions for Jest
+
+### Writing Tests
+
+<CodeGroup>
+```typescript Unit Test Example
+import { renderHook } from '@testing-library/react-hooks';
+import { useProcessPaymentString } from '@/hooks/coco/useProcessPaymentString';
+
+describe('useProcessPaymentString', () => {
+  it('should parse a Cashu token', () => {
+    const { result } = renderHook(() => useProcessPaymentString());
+    const parsed = result.current.parse('cashuAey...');
+    
+    expect(parsed.type).toBe('token');
+    expect(parsed.token).toBeDefined();
+  });
+});
+```
+
+```typescript Component Test Example
+import { render } from '@testing-library/react-native';
+import { WalletHeader } from '@/components/blocks/WalletHeader';
+
+describe('WalletHeader', () => {
+  it('should render the balance', () => {
+    const { getByText } = render(
+      <WalletHeader balance={1000} />
+    );
+    
+    expect(getByText('1000 sats')).toBeTruthy();
+  });
+});
+```
+</CodeGroup>
+
+## Styling Standards
+
+### Use Semantic Tokens
+
+<Warning>
+  Prefer semantic tokens over raw hex colors.
+</Warning>
+
+```typescript
+// ✅ Correct - semantic tokens
+className="bg-surface-secondary text-foreground"
+
+// ❌ Wrong - raw hex colors
+style={{ backgroundColor: '#1a1a1a', color: '#ffffff' }}
+```
+
+### Runtime Color Values
+
+Use `useThemeColor` for dynamic color access:
+
+```typescript
+import { useThemeColor } from '@/hooks/useThemeColor';
+
+const MyComponent = () => {
+  const dangerColor = useThemeColor('danger');
+  const [primary, secondary] = useThemeColor(['primary', 'secondary']);
+  
+  return <View style={{ borderColor: dangerColor }} />;
+};
+```
+
+<Tip>
+  For multiple colors, use the array form to reduce hooks.
+</Tip>
+
+### Prefer className Over style
+
+```typescript
+// ✅ Correct - Tailwind className
+<View className="flex-1 bg-surface p-4" />
+
+// ❌ Avoid - inline styles (use only when dynamic)
+<View style={{ flex: 1, backgroundColor: '#fff', padding: 16 }} />
+```
+
+## Performance Best Practices
+
+### List Performance
+
+<CodeGroup>
+```typescript Stable keyExtractor
+// ✅ Correct - stable function reference
+const keyExtractor = useCallback((item: Transaction) => item.id, []);
+
+<FlatList
+  data={transactions}
+  keyExtractor={keyExtractor}
+  renderItem={renderItem}
+/>
+```
+
+```typescript Stable renderItem
+// ✅ Correct - memoized render function
+const renderItem = useCallback(({ item }: { item: Transaction }) => (
+  <TransactionRow transaction={item} />
+), []);
+```
+</CodeGroup>
+
+### Avoid Unnecessary Memoization
+
+<CodeGroup>
+```typescript When to use useMemo
+// ✅ Good - expensive computation
+const sortedItems = useMemo(
+  () => items.sort((a, b) => b.timestamp - a.timestamp),
+  [items]
+);
+
+// ❌ Unnecessary - simple value
+const fullName = useMemo(() => `${first} ${last}`, [first, last]);
+```
+
+```typescript When to use useCallback
+// ✅ Good - prevents child re-renders
+const handlePress = useCallback(() => {
+  navigation.navigate('Details', { id });
+}, [navigation, id]);
+
+// ❌ Unnecessary - no child dependency
+const handlePress = useCallback(() => {
+  console.log('pressed');
+}, []);
+```
+</CodeGroup>
+
+## Loading States
+
+### Use HeroUI Components
+
+```typescript
+import { Spinner } from 'heroui-native';
+import { Text } from '@/components/ui/Text';
+
+// ✅ Correct - HeroUI Spinner
+{isLoading && <Spinner />}
+
+// ✅ Correct - Text auto-skeleton (nullish children)
+<Text>{userName}</Text> {/* Shows skeleton when userName is null/undefined */}
+```
+
+<Warning>
+  Skeletons must not cause layout shift. Match final dimensions and preserve container structure.
+</Warning>
+
+### Skeleton Best Practices
+
+```typescript
+// ✅ Correct - auto-skeleton with nullish children
+<Text className="text-xl">{balance}</Text>
+
+// ❌ Wrong - separate Skeleton wrapper causes layout shift
+{isLoading ? (
+  <Skeleton height={24} width={100} />
+) : (
+  <Text className="text-xl">{balance}</Text>
+)}
+```
+
+## Comments and JSDoc
+
+<Warning>
+  No JSDoc that restates TypeScript types.
+</Warning>
+
+### When to add JSDoc
+
+Add JSDoc only for:
+- Intent (why this exists)
+- Constraints (limits, edge cases)
+- UX rules (user-facing behavior)
+- Async contracts (timing, dependencies)
+- Invariants (must-hold conditions)
+
+<CodeGroup>
+```typescript Good JSDoc
+/**
+ * Processes a payment string (token, invoice, payment request).
+ * Returns null if the string is invalid or not a known payment type.
+ * 
+ * Note: This hook debounces input to avoid excessive parsing.
+ */
+export function useProcessPaymentString() {
+  // ...
+}
+```
+
+```typescript Bad JSDoc - restates types
+/**
+ * Returns a boolean indicating if the user is authenticated
+ * @returns {boolean} - true if authenticated, false otherwise
+ */
+export function useIsAuthenticated(): boolean {
+  // Types already show this!
+}
+```
+</CodeGroup>
+
+## Quick Reference
+
+| Command | Purpose |
+|---|---|
+| `npm run lint` | Run ESLint |
+| `npm run type-check` | Run TypeScript type checking |
+| `npm run pretty` | Format code with Prettier |
+| `npm run pretty:check` | Check formatting without writing |
+| `npm run knip` | Find unused exports/dependencies |
+| `npm test` | Run Jest tests |
+
+<Check>
+  All five must pass before committing: `lint`, `type-check`, `pretty:check`, `knip`, `test`.
+</Check>

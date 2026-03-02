@@ -1,0 +1,506 @@
+---
+title: Swap Routing
+description: Intelligent routing for multi-mint swaps with middleman support
+---
+
+## Overview
+
+When direct swaps between mints fail (typically due to Lightning routing issues), Sovran can automatically find intermediary mints to route the swap. This uses auditor data and your local swap history to build a routing graph.
+
+## Routing Settings
+
+Configure routing behavior in Settings → Routing:
+
+```typescript stores/settingsStore.ts
+export type MiddlemanTrustMode = 'trusted_only' | 'allow_untrusted';
+
+export interface MiddlemanRoutingSettings {
+  /** Maximum number of intermediary mints in a route (1 = A→via→B, 2 = A→via1→via2→B). */
+  maxHops: number;
+  /** Maximum total fee (in sats) allowed across all hops of an intermediary route. */
+  maxFee: number;
+  /** Minimum success rate (0–1) required for each edge in the route (e.g. 0.9 = 90%). */
+  minSuccessRate: number;
+  /** When true, the most recent swap on each edge must have been OK. */
+  requireLastOk: boolean;
+  /**
+   * Controls which mints can act as intermediaries:
+   * - `'trusted_only'` (default) — only mints the user already trusts.
+   * - `'allow_untrusted'` — any mint from auditor data; untrusted mints are
+   *   temporarily trusted for the swap and untrusted afterward.
+   */
+  trustMode: MiddlemanTrustMode;
+}
+```
+
+### Default Settings
+
+```typescript components/blocks/rebalance/routing.ts
+const DEFAULT_SETTINGS: MiddlemanRoutingSettings = {
+  maxHops: 2,
+  maxFee: 5,
+  minSuccessRate: 0.9,
+  requireLastOk: true,
+  trustMode: 'trusted_only',
+};
+```
+
+## Routing UI
+
+### Max Hops
+
+```typescript app/settings-pages/routing.tsx
+<Card variant="secondary">
+  <Card.Body className="gap-2">
+    <View className="flex-row items-center justify-between">
+      <Label>Max intermediaries</Label>
+      <Text>{middlemanRouting.maxHops}</Text>
+    </View>
+    <Slider
+      value={middlemanRouting.maxHops}
+      minValue={1}
+      maxValue={3}
+      step={1}
+      onChangeEnd={(value) => update({ maxHops: asNumber(value) })}>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb />
+      </Slider.Track>
+    </Slider>
+    <Card.Description>
+      How many middleman mints can be chained together (1 = A→via→B, 2 = A→via1→via2→B).
+    </Card.Description>
+  </Card.Body>
+</Card>
+```
+
+### Max Fee
+
+```typescript app/settings-pages/routing.tsx
+<Card variant="secondary">
+  <Card.Body className="gap-2">
+    <View className="flex-row items-center justify-between">
+      <Label>Max fee</Label>
+      <Text>{`${middlemanRouting.maxFee} sat`}</Text>
+    </View>
+    <Slider
+      value={middlemanRouting.maxFee}
+      minValue={1}
+      maxValue={50}
+      step={1}
+      onChangeEnd={(value) => update({ maxFee: asNumber(value) })}>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb />
+      </Slider.Track>
+    </Slider>
+    <Card.Description>
+      Maximum total fee (in sats) allowed across all hops of an intermediary route.
+    </Card.Description>
+  </Card.Body>
+</Card>
+```
+
+### Min Success Rate
+
+```typescript app/settings-pages/routing.tsx
+<Card variant="secondary">
+  <Card.Body className="gap-2">
+    <View className="flex-row items-center justify-between">
+      <Label>Min success rate</Label>
+      <Text>{`${Math.round(middlemanRouting.minSuccessRate * 100)}%`}</Text>
+    </View>
+    <Slider
+      value={Math.round(middlemanRouting.minSuccessRate * 100)}
+      minValue={50}
+      maxValue={100}
+      step={5}
+      onChangeEnd={(value) => update({ minSuccessRate: asNumber(value) / 100 })}>
+      <Slider.Track>
+        <Slider.Fill />
+        <Slider.Thumb />
+      </Slider.Track>
+    </Slider>
+    <Card.Description>
+      Minimum percentage of successful swaps required for each edge in the route.
+    </Card.Description>
+  </Card.Body>
+</Card>
+```
+
+### Require Last OK
+
+```typescript app/settings-pages/routing.tsx
+<ListGroup variant="secondary">
+  <ListGroup.Item>
+    <ListGroup.ItemContent>
+      <ListGroup.ItemTitle>Last swap must be OK</ListGroup.ItemTitle>
+      <ListGroup.ItemDescription>
+        Require the most recent swap on each edge to have been successful.
+      </ListGroup.ItemDescription>
+    </ListGroup.ItemContent>
+    <ListGroup.ItemSuffix>
+      <HeroSwitch
+        isSelected={middlemanRouting.requireLastOk}
+        onSelectedChange={(v) => update({ requireLastOk: v })}
+      />
+    </ListGroup.ItemSuffix>
+  </ListGroup.Item>
+</ListGroup>
+```
+
+### Trust Mode
+
+```typescript app/settings-pages/routing.tsx
+<Card variant="secondary">
+  <Card.Body className="gap-3">
+    <VStack>
+      <Text size={16}>Intermediary trust policy</Text>
+      <Card.Description>
+        Controls which mints can act as middlemen. Trusted mints are always preferred
+        regardless of this setting.
+      </Card.Description>
+    </VStack>
+
+    <RadioGroup
+      value={middlemanRouting.trustMode}
+      onValueChange={(value) => {
+        if (value === 'trusted_only' || value === 'allow_untrusted') {
+          update({ trustMode: value });
+        }
+      }}>
+      <RadioGroup.Item value="trusted_only">Trusted only</RadioGroup.Item>
+      <Separator className="my-1" />
+      <RadioGroup.Item value="allow_untrusted">Allow untrusted</RadioGroup.Item>
+    </RadioGroup>
+
+    {middlemanRouting.trustMode === 'allow_untrusted' ? (
+      <View className="flex-row items-start gap-2">
+        <Icon
+          name="mdi:alert-circle-outline"
+          size={16}
+          color="#f59e0b"
+          style={{ marginTop: 2 }}
+        />
+        <Text size={12} className="flex-1" style={{ color: '#f59e0b' }}>
+          Untrusted mints will be temporarily trusted for the swap and untrusted
+          afterward. Your ecash passes through mints you have not verified. Only use
+          this with small amounts.
+        </Text>
+      </View>
+    ) : null}
+  </Card.Body>
+</Card>
+```
+
+## Swap Graph
+
+The routing engine builds a directed graph from auditor and local swap history:
+
+```typescript components/blocks/rebalance/routing.ts
+export type EdgeStats = {
+  /** Number of successful swaps on this edge. */
+  okCount: number;
+  /** Total number of swaps on this edge (including failures). */
+  totalCount: number;
+  /** Timestamp (ms since epoch) of the most recent swap. */
+  lastTs: number;
+  /** Whether the most recent swap was OK. */
+  lastOk: boolean;
+  /** Average fee of successful swaps (sats). */
+  avgFee: number;
+  /** Average time taken of successful swaps (ms). */
+  avgTimeTaken: number;
+};
+
+export type SwapGraph = Map<string, Map<string, EdgeStats>>;
+```
+
+### Building the Graph
+
+```typescript components/blocks/rebalance/routing.ts
+export function buildSwapGraph(audits: AuditMintResponse[]): SwapGraph {
+  const graph: SwapGraph = new Map();
+
+  for (const audit of audits) {
+    for (const swap of audit?.swaps ?? []) {
+      if (!swap) continue;
+      const from = swap.from_url;
+      const to = swap.to_url;
+      const ok = isSuccessfulSwap(swap);
+      addEdge(graph, from, to, swap.fee ?? 0, swap.time_taken ?? 0, parseTs(swap.created_at), ok);
+    }
+  }
+
+  return graph;
+}
+
+function addEdge(
+  graph: SwapGraph,
+  from: string,
+  to: string,
+  fee: number,
+  timeTaken: number,
+  ts: number,
+  ok: boolean
+) {
+  if (!from || !to) return;
+  if (from === to) return;
+  const out = graph.get(from) ?? new Map<string, EdgeStats>();
+  const prev = out.get(to);
+
+  const nextTotalCount = (prev?.totalCount ?? 0) + 1;
+  const nextOkCount = (prev?.okCount ?? 0) + (ok ? 1 : 0);
+
+  // Average fee/time only over successful swaps
+  let nextAvgFee = prev?.avgFee ?? 0;
+  let nextAvgTime = prev?.avgTimeTaken ?? 0;
+  if (ok) {
+    const prevOk = prev?.okCount ?? 0;
+    nextAvgFee = prevOk > 0 ? (prev!.avgFee * prevOk + fee) / nextOkCount : fee;
+    nextAvgTime = prevOk > 0 ? (prev!.avgTimeTaken * prevOk + timeTaken) / nextOkCount : timeTaken;
+  }
+
+  // Track the most recent swap's state
+  const isNewest = ts >= (prev?.lastTs ?? 0);
+  const nextLastTs = Math.max(prev?.lastTs ?? 0, ts);
+  const nextLastOk = isNewest ? ok : (prev?.lastOk ?? ok);
+
+  out.set(to, {
+    okCount: nextOkCount,
+    totalCount: nextTotalCount,
+    lastTs: nextLastTs,
+    lastOk: nextLastOk,
+    avgFee: nextAvgFee,
+    avgTimeTaken: nextAvgTime,
+  });
+  graph.set(from, out);
+}
+```
+
+## Local History Integration
+
+Local swap history supplements auditor data:
+
+```typescript components/blocks/rebalance/routing.ts
+export function addLocalHistoryEdges(graph: SwapGraph, groups: SwapGroup[]): void {
+  for (const group of groups) {
+    for (const leg of group.legs) {
+      if (!leg.fromMintUrl || !leg.toMintUrl) continue;
+      if (leg.fromMintUrl === leg.toMintUrl) continue;
+
+      const ok = leg.localStatus === 'done';
+      const failed = leg.localStatus === 'failed';
+      if (!ok && !failed) continue;
+
+      // We don't track exact fees/time per leg, so use 0 for both.
+      // The timestamp comes from the parent group.
+      addEdge(graph, leg.fromMintUrl, leg.toMintUrl, 0, 0, group.createdAt, ok);
+    }
+  }
+}
+```
+
+## Path Finding
+
+BFS algorithm finds optimal intermediary path:
+
+```typescript components/blocks/rebalance/routing.ts
+export function pickIntermediaryPath({
+  from,
+  to,
+  graph,
+  settings,
+  trustedMintUrls,
+}: {
+  from: string;
+  to: string;
+  graph: SwapGraph;
+  settings?: Partial<MiddlemanRoutingSettings>;
+  trustedMintUrls?: Set<string>;
+}): RoutingResult {
+  const cfg: MiddlemanRoutingSettings = { ...DEFAULT_SETTINGS, ...settings };
+  const maxDepth = cfg.maxHops + 1;
+  const trusted = trustedMintUrls ?? new Set<string>();
+
+  const aOut = graph.get(from);
+  if (!aOut) {
+    return { path: null, reason: 'No swap data from source mint in auditor history.' };
+  }
+
+  type BFSEntry = {
+    node: string;
+    path: string[];
+    edges: EdgeStats[];
+    totalFee: number;
+  };
+
+  const queue: BFSEntry[] = [{ node: from, path: [from], edges: [], totalFee: 0 }];
+  let bestPath: string[] | null = null;
+  let bestScore = -Infinity;
+
+  while (queue.length > 0) {
+    const entry = queue.shift()!;
+
+    if (entry.edges.length >= maxDepth) continue;
+
+    const neighbors = graph.get(entry.node);
+    if (!neighbors) continue;
+
+    for (const [neighbor, edge] of neighbors.entries()) {
+      if (!neighbor) continue;
+      if (entry.path.includes(neighbor) && neighbor !== to) continue;
+
+      // Trust check for intermediary nodes
+      if (neighbor !== to) {
+        if (cfg.trustMode === 'trusted_only' && !trusted.has(neighbor)) continue;
+      }
+
+      // Check edge quality
+      if (!edgePassesFilters(edge, cfg)) continue;
+
+      // Check cumulative fee
+      const newFee = entry.totalFee + edge.avgFee;
+      if (newFee > cfg.maxFee) continue;
+
+      const newPath = [...entry.path, neighbor];
+      const newEdges = [...entry.edges, edge];
+
+      if (neighbor === to) {
+        // Count trusted intermediaries for scoring bonus
+        const intermediaries = newPath.slice(1, -1);
+        const trustedCount = intermediaries.filter((url) => trusted.has(url)).length;
+        const trustedBonus = trustedCount * TRUSTED_BONUS_PER_HOP;
+
+        const score = scorePath(newEdges, trustedBonus);
+        if (score > bestScore) {
+          bestScore = score;
+          bestPath = newPath;
+        }
+      } else if (newEdges.length < maxDepth) {
+        queue.push({
+          node: neighbor,
+          path: newPath,
+          edges: newEdges,
+          totalFee: newFee,
+        });
+      }
+    }
+  }
+
+  if (!bestPath) {
+    const modeHint =
+      cfg.trustMode === 'trusted_only'
+        ? ' Only trusted mints were considered. Try "Allow untrusted" in Swap Routing settings.'
+        : '';
+    return {
+      path: null,
+      reason: `No intermediary route found within ${cfg.maxHops} hop(s), ${cfg.maxFee} sat fee limit, and ${Math.round(cfg.minSuccessRate * 100)}% success rate.${modeHint}`,
+    };
+  }
+
+  // Check if any intermediaries are untrusted
+  const intermediaries = bestPath.slice(1, -1);
+  const untrustedCount = intermediaries.filter((url) => !trusted.has(url)).length;
+  const trustNote =
+    untrustedCount > 0
+      ? ` (${untrustedCount} untrusted mint(s) will be temporarily trusted for the swap)`
+      : '';
+
+  return {
+    path: bestPath,
+    reason: `Found route via ${bestPath.length - 2} intermediary mint(s) in auditor history.${trustNote}`,
+  };
+}
+```
+
+## Edge Filtering
+
+```typescript components/blocks/rebalance/routing.ts
+function edgePassesFilters(edge: EdgeStats, settings: MiddlemanRoutingSettings): boolean {
+  // Success rate check
+  if (edge.totalCount > 0) {
+    const successRate = edge.okCount / edge.totalCount;
+    if (successRate < settings.minSuccessRate) return false;
+  } else {
+    return false;
+  }
+
+  // Last swap must be OK
+  if (settings.requireLastOk && !edge.lastOk) return false;
+
+  return true;
+}
+```
+
+## Path Scoring
+
+```typescript components/blocks/rebalance/routing.ts
+const TRUSTED_BONUS_PER_HOP = 100_000;
+
+function scorePath(edges: EdgeStats[], trustedBonus = 0): number {
+  let totalScore = trustedBonus;
+  for (const edge of edges) {
+    const countScore = edge.okCount * 10;
+    const recencyScore = edge.lastTs / (1000 * 60 * 60);
+    const feePenalty = edge.avgFee * 5;
+    const timePenalty = edge.avgTimeTaken * 0.2;
+    totalScore += countScore + recencyScore - feePenalty - timePenalty;
+  }
+  return totalScore;
+}
+```
+
+## Min Transfer Threshold
+
+Skip small transfers during rebalancing:
+
+```typescript app/settings-pages/routing.tsx
+<Section title="Rebalancing">
+  <VStack gap={12}>
+    <Card variant="secondary">
+      <Card.Body className="gap-2">
+        <View className="flex-row items-center justify-between">
+          <Label>Min transfer amount</Label>
+          <Text>{`${minTransferThreshold} sat`}</Text>
+        </View>
+        <Slider
+          value={minTransferThreshold}
+          minValue={1}
+          maxValue={50}
+          step={1}
+          onChangeEnd={(value) => setMinTransferThreshold(asNumber(value))}>
+          <Slider.Track>
+            <Slider.Fill />
+            <Slider.Thumb />
+          </Slider.Track>
+        </Slider>
+        <Card.Description>
+          Transfers below this amount are skipped during rebalancing to avoid noisy,
+          fee-inefficient steps.
+        </Card.Description>
+      </Card.Body>
+    </Card>
+  </VStack>
+</Section>
+```
+
+## Example Routes
+
+### Single Hop
+
+```
+Mint A → Middleman Mint → Mint B
+```
+
+### Double Hop
+
+```
+Mint A → Middleman 1 → Middleman 2 → Mint B
+```
+
+### Trust Mode Comparison
+
+**Trusted Only**: Only uses mints you've already added
+
+**Allow Untrusted**: Can route through any mint in auditor data (temporarily trusted for swap)

@@ -1,0 +1,457 @@
+---
+title: Multi-Currency Display
+description: Display your Bitcoin balance in USD, EUR, GBP, or sats with real-time exchange rates
+icon: dollar-sign
+---
+
+Sovran supports multiple fiat currency displays for your Bitcoin balance. Choose from USD, EUR, GBP, or display in sats with customizable formatting.
+
+## Supported Currencies
+
+<CardGroup cols={2}>
+  <Card title="USD" icon="dollar-sign">
+    United States Dollar (Default)
+  </Card>
+  <Card title="EUR" icon="euro-sign">
+    Euro
+  </Card>
+  <Card title="GBP" icon="sterling-sign">
+    British Pound Sterling
+  </Card>
+  <Card title="Sats" icon="bitcoin-sign">
+    Bitcoin satoshis (native)
+  </Card>
+</CardGroup>
+
+## Currency Configuration
+
+The display currency is managed through the `settingsStore`:
+
+```typescript stores/settingsStore.ts
+export type DisplayCurrency = 'usd' | 'eur' | 'gbp';
+
+interface SettingsState {
+  displayCurrency: DisplayCurrency;  // Default: 'usd'
+  displayBtc: number;                // 0-3 (sats display mode)
+}
+
+interface SettingsActions {
+  setDisplayCurrency: (currency: DisplayCurrency) => void;
+  getDisplayCurrency: () => DisplayCurrency;
+  setDisplayBtc: (display: number) => void;
+  getDisplayBtc: () => number;
+}
+```
+
+## Sats Display Modes
+
+Sovran offers 4 different ways to display satoshi amounts:
+
+<Steps>
+  <Step title="Mode 0: Bitcoin Icon Prefix">
+    `₿ 0.00012345` — Shows BTC icon with 8 decimal places
+  </Step>
+  <Step title="Mode 1: Lightning Icon Suffix">
+    `12,345 ⚡` — Shows sats with lightning bolt
+  </Step>
+  <Step title="Mode 2: Text-only Sats">
+    `12,345 sats` — Plain text format
+  </Step>
+  <Step title="Mode 3: Alternative BTC Icon">
+    `₿ 0.00012345` — Alternative BTC display (same as mode 0)
+  </Step>
+</Steps>
+
+### Setting Display Mode
+
+```typescript
+import { useSettingsStore } from 'stores/settingsStore';
+
+const setDisplayBtc = useSettingsStore(state => state.setDisplayBtc);
+
+// Use lightning icon mode
+setDisplayBtc(1);
+```
+
+## Price Data Management
+
+Exchange rates are fetched and stored in the `pricelistStore`.
+
+### Pricelist Store
+
+```typescript stores/pricelistStore.ts
+interface PricelistData {
+  usd: { btc: number };   // USD per BTC
+  eur?: { btc: number };  // EUR per BTC
+  gbp?: { btc: number };  // GBP per BTC
+}
+
+interface PricelistState {
+  pricelist: PricelistData | null;
+  isLoading: boolean;
+  lastUpdated: number | null;  // Timestamp
+  error: string | null;
+}
+```
+
+### Setting Exchange Rates
+
+```typescript
+import { usePricelistStore } from 'stores/pricelistStore';
+
+const setBtcPrices = usePricelistStore(state => state.setBtcPrices);
+
+// Update all currency rates
+setBtcPrices({
+  USD: 63900,
+  EUR: 53500,
+  GBP: 47800,
+});
+
+// Update only USD
+const setBtcPrice = usePricelistStore(state => state.setBtcPrice);
+setBtcPrice(64000);
+```
+
+### Retrieving Prices
+
+```typescript
+import { useBtcPrice } from 'stores/pricelistStore';
+
+// React hook
+const usdPrice = useBtcPrice('usd');  // Current USD/BTC rate
+const eurPrice = useBtcPrice('eur');
+
+// Direct access
+const getBtcPrice = usePricelistStore(state => state.getBtcPrice);
+const currentPrice = getBtcPrice('usd');
+```
+
+### Price Staleness Check
+
+Check if cached prices are outdated:
+
+```typescript
+const isStale = usePricelistStore(state => state.isStale);
+
+if (isStale(5)) {  // 5 minutes
+  // Fetch fresh prices
+}
+```
+
+## Fiat Currency Pill Component
+
+The `FiatCurrencyPill` component displays fiat equivalents with currency selection.
+
+### Basic Usage
+
+```tsx components/blocks/FiatCurrencyPill.tsx
+import { FiatCurrencyPill } from 'components/blocks/FiatCurrencyPill';
+
+<FiatCurrencyPill
+  displayText="≈ $12.34"
+  onPress={() => toggleInputMode()}
+  showToggleGlyph
+  enableCurrencyMenu
+/>
+```
+
+### Props
+
+```typescript
+interface FiatCurrencyPillProps {
+  displayText: string;              // Display string (e.g., "≈ $12.34")
+  onPress?: () => void;             // Tap handler (toggle input mode)
+  onSelectCurrency?: (currency: DisplayCurrency) => void;  // Override currency selection
+  showToggleGlyph?: boolean;        // Show ⇄ icon
+  textSize?: number;                // Font size (default: 14)
+  enableCurrencyMenu?: boolean;     // Enable long-press menu (default: true)
+}
+```
+
+### Currency Selection Menu
+
+On iOS with liquid glass support, the pill shows a native context menu:
+
+```tsx
+<Menu
+  onPrimaryAction={onPress}
+  label={<SwiftUIText>{displayText}</SwiftUIText>}>
+  <SwiftUIButton
+    systemImage="dollarsign"
+    label="USD"
+    onPress={() => handleSelectCurrency('usd')}
+  />
+  <SwiftUIButton
+    systemImage="eurosign"
+    label="EUR"
+    onPress={() => handleSelectCurrency('eur')}
+  />
+  <SwiftUIButton
+    systemImage="sterlingsign"
+    label="GBP"
+    onPress={() => handleSelectCurrency('gbp')}
+  />
+</Menu>
+```
+
+### Fallback Behavior
+
+On Android or older iOS versions, currency selection uses `ActionSheetIOS`:
+
+```tsx
+ActionSheetIOS.showActionSheetWithOptions(
+  {
+    options: ['USD', 'EUR', 'GBP', 'Cancel'],
+    cancelButtonIndex: 3,
+    userInterfaceStyle: 'dark',
+  },
+  (buttonIndex) => {
+    if (buttonIndex === 0) handleSelectCurrency('usd');
+    if (buttonIndex === 1) handleSelectCurrency('eur');
+    if (buttonIndex === 2) handleSelectCurrency('gbp');
+  }
+);
+```
+
+## Amount Formatter
+
+The `AmountFormatter` component handles all currency display logic.
+
+### Basic Usage
+
+```tsx components/ui/AmountFormatter.tsx
+import { AmountFormatter } from 'components/ui/AmountFormatter';
+
+<AmountFormatter
+  amount={12345}
+  unit="sat"
+  size={42}
+  weight="heavy"
+  useTypeColors
+  transactionType="receive"
+/>
+```
+
+### Props
+
+```typescript
+interface AmountFormatterProps {
+  amount: number;                    // Amount to display
+  unit: CurrencyUnit;                // 'sat' | 'usd' | 'eur' | string
+  size?: number;                     // Font size (default: 42)
+  weight?: FontWeight;               // Font weight (default: 'heavy')
+  color?: string;                    // Text color
+  style?: StyleProp<ViewStyle>;      // Container style
+  animated?: boolean;                // Animate size changes
+  useTypeColors?: boolean;           // Color based on transaction type
+  transactionType?: TransactionType; // 'send' | 'receive'
+  centered?: boolean;                // Center alignment
+  className?: string;                // Tailwind classes
+}
+```
+
+### Display Modes
+
+```tsx
+// Mode 0 & 3: BTC icon prefix
+<HStack>
+  <BtcIcon />  {/* ₿ */}
+  <Text>0.00012345</Text>
+</HStack>
+
+// Mode 1: Lightning icon suffix
+<HStack>
+  <Text>12,345</Text>
+  <LightningUnit />  {/* ⚡ */}
+</HStack>
+
+// Mode 2: Text-only
+<Text>12,345 sats</Text>
+
+// Fiat currencies
+<Text>$123.45</Text>
+```
+
+### Type-based Colors
+
+```tsx
+function getTypeColor(
+  amount: number,
+  transactionType: TransactionType,
+  foreground: string,
+  danger: string
+): string {
+  if (!amount) return opacity(foreground, 0.4);
+  return transactionType === 'receive' ? foreground : danger;
+}
+```
+
+## Currency Formatting Utilities
+
+The `helper/currency.ts` module provides formatting functions.
+
+### Format Amount
+
+```typescript helper/currency.ts
+import { formatAmount } from 'helper/currency';
+
+// Basic formatting
+formatAmount({ amount: 12345, unit: 'sat' });
+// → "12,345"
+
+// Convert to different currency
+formatAmount({ amount: 100000, unit: 'sat' }, { displayAs: 'usd' });
+// → "$63.90"
+
+// Use user's display preference
+formatAmount({ amount: 12345, unit: 'sat' }, { useUserPreference: true });
+// → "12,345" or "0.00012345" depending on displayBtc mode
+```
+
+### Currency Symbols
+
+```typescript
+const SYMBOLS: Record<string, string> = {
+  usd: '$',
+  eur: '€',
+  gbp: '£',
+  btc: '₿',
+  sats: 'ṩ',
+};
+```
+
+### Exchange Rate Conversion
+
+All conversions route through BTC as the base unit:
+
+```typescript
+function getRate(unit: string): number {
+  const pricelist = usePricelistStore.getState().pricelist;
+  const rates: Record<string, number> = {
+    btc: 1,
+    sats: 100_000_000,
+    usd: pricelist?.usd?.btc ?? 63_900,  // Fallback
+    eur: pricelist?.eur?.btc ?? 53_500,
+    gbp: pricelist?.gbp?.btc ?? 47_800,
+  };
+  return rates[unit] ?? 1;
+}
+
+// Convert 1000 sats to USD
+const satsInBtc = 1000 / 100_000_000;       // → 0.00001 BTC
+const usdValue = satsInBtc * 63_900;        // → $0.639
+```
+
+### Number Formatting
+
+```typescript
+const satsFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+});
+
+const fiatFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const btcFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 8,
+  maximumFractionDigits: 8,
+});
+```
+
+## Fiat Storage Format
+
+<Warning>
+  Fiat amounts are stored as **cents** (not dollars) to avoid floating-point errors:
+  
+  ```typescript
+  // Storing $12.34
+  const storedValue = 1234;  // Cents
+  
+  // Converting for display
+  const dollars = storedValue / 100;  // → 12.34
+  ```
+</Warning>
+
+## Complete Example
+
+Here's a complete example showing currency selection and display:
+
+```tsx
+import { useState } from 'react';
+import { useSettingsStore } from 'stores/settingsStore';
+import { useBtcPrice } from 'stores/pricelistStore';
+import { formatAmount } from 'helper/currency';
+import { AmountFormatter } from 'components/ui/AmountFormatter';
+import { FiatCurrencyPill } from 'components/blocks/FiatCurrencyPill';
+
+function WalletBalance() {
+  const satsBalance = 123456;
+  const displayCurrency = useSettingsStore(state => state.displayCurrency);
+  const btcPrice = useBtcPrice(displayCurrency);
+  
+  // Calculate fiat equivalent
+  const fiatValue = formatAmount(
+    { amount: satsBalance, unit: 'sat' },
+    { displayAs: displayCurrency, currencyDisplay: 'symbol' }
+  );
+
+  return (
+    <View>
+      {/* Main balance */}
+      <AmountFormatter
+        amount={satsBalance}
+        unit="sat"
+        size={48}
+        weight="heavy"
+      />
+      
+      {/* Fiat equivalent */}
+      <FiatCurrencyPill
+        displayText={`≈ ${fiatValue}`}
+        enableCurrencyMenu
+      />
+    </View>
+  );
+}
+```
+
+## Best Practices
+
+<Tip>
+  Always provide fallback exchange rates:
+  
+  ```typescript
+  const rate = pricelist?.usd?.btc ?? 63_900;  // Hardcoded fallback
+  ```
+</Tip>
+
+<Tip>
+  Check price staleness before displaying fiat values:
+  
+  ```typescript
+  const isStale = usePricelistStore(state => state.isStale);
+  
+  if (isStale(5)) {
+    // Show "Price data outdated" indicator
+    // Trigger background refresh
+  }
+  ```
+</Tip>
+
+<Warning>
+  Never perform currency conversions on the frontend without validated exchange rates. Always fetch from a trusted price feed.
+</Warning>
+
+## Related Resources
+
+<Card title="Themes" icon="palette" href="/customization/themes">
+  Customize your wallet appearance
+</Card>
+
+<Card title="Settings Overview" icon="gear" href="/customization/settings">
+  Configure all app preferences
+</Card>

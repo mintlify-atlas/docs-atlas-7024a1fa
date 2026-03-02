@@ -1,0 +1,393 @@
+---
+title: Wallet Health
+description: Monitor and maintain optimal balance distribution across mints
+---
+
+## Overview
+
+Wallet Health helps you maintain an optimal distribution of funds across your trusted mints. It tracks drift from your desired balance split and alerts you when rebalancing is needed.
+
+## Health Card
+
+The health card appears on the Explore tab:
+
+```typescript components/blocks/health/WalletHealthCard.tsx
+export function WalletHealthCard({ defaultUnit = 'sat' }: { defaultUnit?: string }) {
+  const { normalizedUnit, balance, mintUrlsForUnit, desiredDistributionBp, pendingOutgoingCount } =
+    useWalletHealthData(defaultUnit);
+
+  const health = useMemo(() => {
+    return computeWalletHealth({
+      unit: normalizedUnit,
+      mintUrlsForUnit,
+      balancesByMintUrl: balance,
+      desiredDistributionBp,
+      pendingOutgoingCount,
+    });
+  }, [normalizedUnit, mintUrlsForUnit, balance, desiredDistributionBp, pendingOutgoingCount]);
+
+  return (
+    <GestureDetector gesture={tap}>
+      <Animated.View style={pressAnimStyle}>
+        <RNView
+          ref={cardRef}
+          style={[
+            styles.card,
+            {
+              borderColor: opacity(accentColor, 0.25),
+              opacity: hero.isHidden('walletHealth', 'source') ? 0 : 1,
+            },
+          ]}>
+          <WalletHealthCardFrame
+            accentColor={accentColor}
+            backgroundColor={primary950}
+            highlightColor={primary50}>
+            <VStack className="p-4.5">
+              <HStack align="center" justify="space-between">
+                <HStack align="center" gap={10}>
+                  <View style={[styles.iconBox, { backgroundColor: opacity(accentColor, 0.16) }]}>
+                    <Icon name="garden:heart-fill-16" size={22} color={accentColor} />
+                  </View>
+                  <VStack>
+                    <Text size={16} heavy style={{ color: primary50 }}>
+                      Wallet health
+                    </Text>
+                    <HStack align="center" gap={8} className="mt-1.5">
+                      <View
+                        style={[
+                          styles.unitPill,
+                          {
+                            backgroundColor: opacity(accentColor, 0.14),
+                            borderColor: opacity(accentColor, 0.22),
+                          },
+                        ]}>
+                        <Text size={10} heavy style={{ color: opacity(accentColor, 0.9) }}>
+                          {normalizedUnit.toUpperCase()}
+                        </Text>
+                      </View>
+                      <Text size={11} style={{ color: opacity(accentColor, 0.7) }}>
+                        Tap for details
+                      </Text>
+                    </HStack>
+                  </VStack>
+                </HStack>
+                <Icon name="mdi:chevron-right" size={22} color={opacity(primary50, 0.85)} />
+              </HStack>
+
+              <HStack align="center" className="mt-3.5 flex-wrap gap-4">
+                {health.chips.map((chip) => {
+                  const iconName = chipIconName(chip.label);
+                  const isBalanced = chip.label.toLowerCase().includes('balanced');
+                  const displayColor = isBalanced
+                    ? opacity(primary50, 0.85)
+                    : opacity(accentColor, 0.8);
+                  return (
+                    <HStack key={chip.label} align="center" gap={6}>
+                      <Icon name={iconName} size={14} color={displayColor} />
+                      <Text size={11} style={{ color: displayColor }}>
+                        {chip.label}
+                      </Text>
+                    </HStack>
+                  );
+                })}
+              </HStack>
+            </VStack>
+          </WalletHealthCardFrame>
+        </RNView>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+```
+
+## Health Modal
+
+Tapping the health card opens a detailed modal:
+
+```typescript app/(drawer)/(tabs)/explore/healthModal.tsx
+function HealthModalScreen() {
+  const params = useLocalSearchParams<{ unit?: string }>();
+  const initialUnit = (params.unit || 'sat').toLowerCase();
+
+  const { trustedMints } = useMints();
+  const currencies = useMemo(() => getCurrenciesFromMints(trustedMints), [trustedMints]);
+  const [selectedCurrency, setSelectedCurrency] = useState<string>(
+    initialUnit.toUpperCase() === 'BTC' ? 'SAT' : initialUnit.toUpperCase()
+  );
+
+  const handleAction = useCallback((action: HealthCta) => {
+    if (action.type === 'openPendingEcash') {
+      router.navigate('/pendingEcash');
+      return;
+    }
+    if (action.type === 'openBalanceSplit') {
+      router.navigate({ pathname: '/(mint-flow)/distribution', params: { unit: action.unit } });
+      return;
+    }
+    if (action.type === 'openRebalancePlan') {
+      router.navigate({ pathname: '/(mint-flow)/rebalancePlan', params: { unit: action.unit } });
+      return;
+    }
+  }, []);
+
+  return (
+    <WalletHealthModalContent
+      unit={unit}
+      onAction={handleAction}
+      topOffset={topOffset}
+      currencies={availableCurrencies}
+      selectedCurrency={selectedCurrency}
+      onCurrencyChange={setSelectedCurrency}
+      scrollY={scrollY}>
+      {({ heroContent, tabsContent, bodyContent }) => (
+        <RNView style={{ flex: 1 }}>
+          <ModalLayoutWrapper
+            contentPadding={0}
+            useAnimatedScroll
+            scrollY={scrollY}
+            bottomPadding={32}
+            disableHeaderSpacer
+            scrollIndicatorInsets={{
+              top: Math.max(0, stickyHeaderHeight - nativeHeaderHeight),
+            }}>
+            <RNView style={{ height: stickyHeaderHeight }} />
+            <RNView
+              style={{
+                marginTop: -HEADER_OVERLAP,
+                paddingTop: HEADER_OVERLAP,
+              }}>
+              {bodyContent}
+            </RNView>
+          </ModalLayoutWrapper>
+
+          <RNView
+            style={styles.stickyHeader}
+            pointerEvents="box-none"
+            onLayout={handleStickyLayout}>
+            <RNView>
+              <RNView
+                style={[
+                  StyleSheet.absoluteFill,
+                  { backgroundColor: background, bottom: HEADER_OVERLAP },
+                ]}
+              />
+              <LinearGradient
+                colors={[background, opacity(background, 0)]}
+                style={styles.headerGradient}
+                pointerEvents="none"
+              />
+              {heroContent}
+              <RNView style={{ marginTop: 10 }}>{tabsContent}</RNView>
+            </RNView>
+          </RNView>
+        </RNView>
+      )}
+    </WalletHealthModalContent>
+  );
+}
+```
+
+## Health States
+
+### Balanced
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+if (needsRebalance) {
+  return {
+    severity: 'warn' as const,
+    title: 'Needs rebalance',
+    subtitle: `Off by ~${formatPctFromBp(maxDriftBp)} from your balance split.`,
+    accent,
+  };
+}
+return {
+  severity: 'ok' as const,
+  title: 'Balanced',
+  subtitle: 'Balances are close to your balance split.',
+  accent,
+};
+```
+
+Wallet is within 2% of desired distribution
+
+### Needs Rebalance
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+const needsRebalance = hasDesired && totalBalance > 0 && maxDriftBp >= 200;
+```
+
+Wallet has drifted 2% or more from desired distribution
+
+### Not Configured
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+if (!hasDesired) {
+  return {
+    severity: 'warn' as const,
+    title: 'Set up your balance split',
+    subtitle: 'Choose how balances should be split across mints.',
+    accent,
+  };
+}
+```
+
+No balance split has been configured
+
+### No Balance
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+if (totalBalance <= 0) {
+  return {
+    severity: 'info' as const,
+    title: 'No balance',
+    subtitle: 'Add funds to see drift and rebalancing options.',
+    accent,
+  };
+}
+```
+
+No funds in this currency
+
+## Drift Calculation
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+const maxDriftBp = useMemo(() => {
+  if (!hasDesired || totalBalance <= 0) return 0;
+
+  const actualBp = normalizeBpLargestRemainder(mintUrlsForUnit, balance, totalBalance);
+
+  let maxDrift = 0;
+  for (const url of mintUrlsForUnit) {
+    const d = desiredDistributionBp[url] || 0;
+    const a = actualBp[url] || 0;
+    maxDrift = Math.max(maxDrift, Math.abs(a - d));
+  }
+
+  return maxDrift;
+}, [hasDesired, totalBalance, mintUrlsForUnit, balance, desiredDistributionBp]);
+```
+
+Drift is measured in basis points (1 bp = 0.01%):
+
+- **< 200 bp (2%)**: Balanced
+- **≥ 200 bp (2%)**: Needs rebalance
+
+## Health Stats
+
+### Drift
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+const driftStat = useMemo(() => {
+  if (totalBalance <= 0) return '—';
+  if (!hasDesired) return '—';
+  return needsRebalance ? `~${formatPctFromBp(maxDriftBp)}` : 'OK';
+}, [totalBalance, hasDesired, needsRebalance, maxDriftBp]);
+```
+
+Shows current drift from desired distribution
+
+### Pending
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+const pendingStat = useMemo(() => {
+  return pendingOutgoingCount > 0 ? `${pendingOutgoingCount}` : '0';
+}, [pendingOutgoingCount]);
+```
+
+Number of unclaimed sent tokens
+
+### Split
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+const splitStat = useMemo(() => {
+  if (totalBalance <= 0) return '—';
+  return hasDesired ? 'Set' : 'Not set';
+}, [totalBalance, hasDesired]);
+```
+
+Whether balance split is configured
+
+## Actions
+
+### Rebalance Now
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+if (hasDesired && totalBalance > 0) {
+  const driftValue = needsRebalance ? `~${formatPctFromBp(maxDriftBp)}` : 'OK';
+  rows.push({
+    key: 'rebalance',
+    leftIcon: <Icon name="mdi:swap-horizontal" size={ROW_ICON_SIZE} color={primary400} />,
+    label: 'Rebalance now',
+    value: driftValue,
+    onPress: handleRebalancePress,
+  });
+}
+```
+
+Opens rebalance plan to redistribute funds
+
+### Set/Edit Balance Split
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+rows.push({
+  key: 'split',
+  leftIcon: (
+    <Icon name="fluent:split-vertical-24-filled" size={ROW_ICON_SIZE} color={primary400} />
+  ),
+  label: hasDesired ? 'Edit balance split' : 'Set balance split',
+  value: !hasDesired ? 'Not set' : undefined,
+  onPress: handleSplitPress,
+});
+```
+
+Configure desired distribution percentages
+
+## Currency Tabs
+
+Health is tracked per currency:
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+<MintCurrencyTabs
+  currencies={currencies}
+  selectedCurrency={selectedCurrency}
+  onCurrencyChange={onCurrencyChange}
+  scrollY={scrollY}
+/>
+```
+
+Each currency (SAT, USD, EUR, GBP) has independent health tracking
+
+## Hero Transition
+
+The health modal uses hero transitions for smooth navigation:
+
+```typescript components/blocks/health/WalletHealthCard.tsx
+const handlePress = useCallback(() => {
+  hero.registerRef('walletHealth', 'source', cardRef.current);
+  hero.startWalletHealth(normalizedUnit);
+}, [hero, normalizedUnit]);
+```
+
+```typescript components/blocks/health/WalletHealthModalContent.tsx
+const handleHeroLayout = useCallback(() => {
+  heroTransition.registerRef('walletHealth', 'destination', heroRef.current);
+}, [heroTransition]);
+```
+
+## Use Cases
+
+### Risk Distribution
+
+Spread funds across multiple mints to reduce single-mint risk
+
+### Liquidity Management
+
+Maintain sufficient balance in frequently-used mints
+
+### Geographic Distribution
+
+Balance across mints in different jurisdictions
+
+### Automatic Rebalancing
+
+Receive alerts when distribution drifts from target

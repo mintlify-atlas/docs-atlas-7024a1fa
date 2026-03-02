@@ -1,0 +1,562 @@
+---
+title: Wallet Rebalancing
+description: Automatically distribute ecash across multiple mints based on target allocations
+icon: scale-balanced
+---
+
+## Overview
+
+Wallet rebalancing automatically redistributes your ecash balance across multiple mints according to target percentages. This helps:
+
+- **Reduce custodial risk** - Spread funds across trusted mints
+- **Maintain liquidity** - Ensure each mint has usable balance
+- **Optimize fees** - Consolidate fragmented proofs
+
+## Balance Distribution Store
+
+The `mintDistributionStore.ts` manages target allocations per currency unit.
+
+### Data Structure
+
+```typescript
+interface MintDistributionState {
+  // Map of unit -> { mintUrl -> distributionBp }
+  distributions: Record<string, Record<string, number>>;
+}
+
+// 10,000 basis points = 100%
+const TOTAL_BASIS_POINTS = 10_000;
+```
+
+### Usage Example
+
+```typescript
+import { useMintDistributionStore, bpToPercent } from 'stores/mintDistributionStore';
+
+function DistributionEditor({ unit }: { unit: string }) {
+  const distribution = useMintDistributionStore(state => 
+    state.getDistribution(unit)
+  );
+  const setMintDistribution = useMintDistributionStore(state => 
+    state.setMintDistribution
+  );
+  
+  // distribution: { 'https://mint-a.com': 5000, 'https://mint-b.com': 5000 }
+  // Mint A: 50%, Mint B: 50%
+  
+  return (
+    <>
+      {Object.entries(distribution).map(([mintUrl, bp]) => (
+        <Slider
+          key={mintUrl}
+          value={bp}
+          max={TOTAL_BASIS_POINTS}
+          onChange={(newBp) => {
+            setMintDistribution(unit, mintUrl, newBp, allMintUrls);
+          }}
+        />
+        <Text>{bpToPercent(bp)}%</Text>
+      ))}
+    </>
+  );
+}
+```
+
+### Automatic Redistribution
+
+When you adjust one mint's allocation, others are automatically rebalanced:
+
+```typescript
+// User sets Mint A from 33% to 60%
+setMintDistribution('sat', 'https://mint-a.com', 6000, allMintUrls);
+
+// System automatically reduces Mint B and Mint C proportionally
+// Before: A=33%, B=33%, C=34%
+// After:  A=60%, B=20%, C=20%
+```
+
+### Special Cases
+
+**100% → Less than 100%:**
+When reducing a mint from 100%, all other mints are activated:
+
+```typescript
+// Before: A=100%, B=0%, C=0%
+setMintDistribution('sat', 'https://mint-a.com', 7000, allMintUrls);
+// After:  A=70%, B=15%, C=15%
+```
+
+**Active-only redistribution:**
+Normally, only mints with `bp > 0` participate in redistribution:
+
+```typescript
+// Before: A=50%, B=50%, C=0%
+setMintDistribution('sat', 'https://mint-a.com', 7000, allMintUrls);
+// After:  A=70%, B=30%, C=0%  (C stays at 0)
+```
+
+### Quick Actions
+
+```typescript
+const store = useMintDistributionStore.getState();
+
+// Equalize all active mints
+store.equalizeMints('sat', allMintUrls);
+// Result: Each active mint gets equal share
+
+// Set mint to 100%
+store.maxMint('sat', mintUrl, allMintUrls);
+// Result: Selected mint = 100%, all others = 0%
+
+// Set mint to 0% and redistribute
+store.minMint('sat', mintUrl, allMintUrls);
+// Result: Selected mint = 0%, freed bp distributed to others
+```
+
+## Rebalance Planning
+
+The rebalance planner (`components/blocks/rebalance/rebalancePlanner.ts`) calculates transfer steps:
+
+### Algorithm
+
+```typescript
+interface RebalancePlan {
+  steps: TransferStep[];
+  currentBalances: Record<string, number>;
+  targetBalances: Record<string, number>;
+}
+
+interface TransferStep {
+  id: string;
+  fromMintUrl: string;
+  toMintUrl: string;
+  amount: number;
+}
+
+function computeRebalancePlan(
+  mintBalances: { mintUrl: string; balance: number }[],
+  distribution: Record<string, number>,  // basis points
+  minTransferThreshold: number = 10
+): RebalancePlan {
+  const totalBalance = mintBalances.reduce((sum, m) => sum + m.balance, 0);
+  
+  // Calculate target balances
+  const targetBalances: Record<string, number> = {};
+  for (const { mintUrl } of mintBalances) {
+    const bp = distribution[mintUrl] || 0;
+    targetBalances[mintUrl] = Math.floor((bp / 10_000) * totalBalance);
+  }
+  
+  // Calculate deltas
+  const deltas = mintBalances.map(({ mintUrl, balance }) => ({
+    mintUrl,
+    delta: balance - targetBalances[mintUrl]
+  }));
+  
+  // Separate surplus (positive) and deficit (negative)
+  const surplus = deltas.filter(d => d.delta > minTransferThreshold);
+  const deficit = deltas.filter(d => d.delta < -minTransferThreshold);
+  
+  // Generate transfer steps
+  const steps: TransferStep[] = [];
+  let stepCounter = 0;
+  
+  for (const from of surplus) {
+    let remaining = from.delta;
+    
+    for (const to of deficit) {
+      if (remaining <= minTransferThreshold) break;
+      
+      const transferAmount = Math.min(remaining, Math.abs(to.delta));
+      if (transferAmount < minTransferThreshold) continue;
+      
+      steps.push({
+        id: `step-${stepCounter++}`,
+        fromMintUrl: from.mintUrl,
+        toMintUrl: to.mintUrl,
+        amount: transferAmount
+      });
+      
+      remaining -= transferAmount;
+      to.delta += transferAmount;
+    }
+  }
+  
+  return { steps, currentBalances, targetBalances };
+}
+```
+
+### Already Balanced Check
+
+```typescript
+function isAlreadyBalanced(
+  currentBalances: Record<string, number>,
+  targetBalances: Record<string, number>,
+  threshold: number = 10
+): boolean {
+  for (const [mintUrl, target] of Object.entries(targetBalances)) {
+    const current = currentBalances[mintUrl] || 0;
+    if (Math.abs(current - target) > threshold) {
+      return false;
+    }
+  }
+  return true;
+}
+```
+
+## Rebalance Execution
+
+The rebalance plan screen (`app/(mint-flow)/rebalancePlan.tsx`) executes transfer steps sequentially:
+
+### Step States
+
+```typescript
+type StepStatus = 
+  | 'pending'
+  | 'creatingInvoice'
+  | 'invoiceReady'
+  | 'melting'
+  | 'verifying'
+  | 'routing'      // Middleman routing in progress
+  | 'done'
+  | 'failed'
+  | 'skipped';     // Source balance too low
+
+interface StepState {
+  status: StepStatus;
+  invoice?: string;
+  operationId?: string;
+  errorMessage?: string;
+  routingDetail?: string;
+  routeSuggestion?: RouteSuggestion;
+}
+```
+
+### Execution Flow
+
+```typescript
+async function executeStep(step: TransferStep): Promise<boolean> {
+  const { fromMintUrl, toMintUrl, amount } = step;
+  
+  try {
+    // 1. Check source balance
+    const balances = await manager.wallet.getBalances();
+    const sourceBalance = balances[fromMintUrl] || 0;
+    
+    if (sourceBalance < minTransferThreshold + feeHeadroom) {
+      updateStepState(step.id, { status: 'skipped' });
+      return true; // Not a failure
+    }
+    
+    // 2. Create invoice on destination
+    updateStepState(step.id, { status: 'creatingInvoice' });
+    const mintQuote = await requestLightningInvoice(toMintUrl, amount);
+    const invoice = mintQuote.request;
+    updateStepState(step.id, { status: 'invoiceReady', invoice });
+    
+    // 3. Prepare melt on source (get exact fees)
+    const prepared = await manager.quotes.prepareMeltBolt11(fromMintUrl, invoice);
+    updateStepState(step.id, { operationId: prepared.id });
+    
+    // 4. Execute melt
+    updateStepState(step.id, { status: 'melting' });
+    await manager.quotes.executeMelt(prepared.id);
+    
+    // 5. Verify destination balance increased
+    updateStepState(step.id, { status: 'verifying' });
+    await waitForBalanceIncrease(toMintUrl, amount, 15000);
+    
+    // 6. Done
+    updateStepState(step.id, { status: 'done' });
+    return true;
+    
+  } catch (err) {
+    // Handle no_route with middleman routing
+    if (err.message.includes('no_route')) {
+      return await handleMiddlemanRouting(step);
+    }
+    
+    updateStepState(step.id, { 
+      status: 'failed', 
+      errorMessage: err.message 
+    });
+    return false;
+  }
+}
+```
+
+### Middleman Routing
+
+When direct routing fails, automatically find intermediary path:
+
+```typescript
+async function handleMiddlemanRouting(step: TransferStep) {
+  updateStepState(step.id, { 
+    status: 'routing',
+    routeSuggestion: { status: 'searching' }
+  });
+  
+  // Build candidate routes
+  const suggestion = await computeRouteSuggestion(
+    step.fromMintUrl, 
+    step.toMintUrl
+  );
+  
+  if (!suggestion?.path) {
+    throw new Error('No route found');
+  }
+  
+  // suggestion.path: ['mint-a', 'mint-m', 'mint-b']
+  updateStepState(step.id, {
+    routeSuggestion: { 
+      status: 'found', 
+      path: suggestion.path,
+      pathNames: suggestion.pathNames
+    }
+  });
+  
+  // Execute chain of hops
+  for (let i = 0; i < suggestion.path.length - 1; i++) {
+    const hopFrom = suggestion.path[i];
+    const hopTo = suggestion.path[i + 1];
+    
+    // Execute hop...
+  }
+  
+  return true;
+}
+```
+
+### Execution Lock
+
+Prevent concurrent melt operations:
+
+```typescript
+const executionLockRef = useRef(false);
+
+async function executeStep(step: TransferStep) {
+  // Wait for lock
+  while (executionLockRef.current) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  executionLockRef.current = true;
+  
+  try {
+    // Execute step...
+  } finally {
+    executionLockRef.current = false;
+  }
+}
+```
+
+## UI Components
+
+### Distribution Editor
+
+The distribution screen (`app/(mint-flow)/distribution.tsx`) shows:
+
+- **Sliders** for each mint's allocation
+- **Quick actions** (Equalize, Max, Min)
+- **Preview** of target balances
+- **Launch rebalance** button
+
+### Rebalance Plan Screen
+
+The plan screen (`app/(mint-flow)/rebalancePlan.tsx`) displays:
+
+```typescript
+import { RebalanceStepRow } from 'components/blocks/rebalance';
+import { RebalanceChainCard } from 'components/blocks/rebalance';
+
+function RebalancePlanScreen() {
+  const plan = computeRebalancePlan(mintBalances, distribution, minTransferThreshold);
+  const [stepStates, setStepStates] = useState<Record<string, StepState>>({});
+  
+  return (
+    <>
+      {/* Progress indicator */}
+      <ProgressBar 
+        value={completedSteps} 
+        max={plan.steps.length} 
+      />
+      
+      {/* Step list */}
+      {groupedSteps.map((group) => (
+        group.type === 'chain' ? (
+          <RebalanceChainCard
+            key={group.id}
+            chain={group}
+            stepStates={stepStates}
+          />
+        ) : (
+          <RebalanceStepRow
+            key={group.step.id}
+            step={group.step}
+            stepState={stepStates[group.step.id]}
+          />
+        )
+      ))}
+      
+      {/* Action buttons */}
+      <ButtonHandler
+        buttons={[
+          {
+            text: 'Run Rebalance',
+            onPress: runRebalance,
+            disabled: isRunning
+          },
+          {
+            text: 'Cancel',
+            onPress: () => router.back()
+          }
+        ]}
+      />
+    </>
+  );
+}
+```
+
+### Step Grouping
+
+Chain steps (middleman routes) are grouped visually:
+
+```typescript
+import { groupStepsForDisplay } from 'components/blocks/rebalance/groupSteps';
+
+const groupedSteps = groupStepsForDisplay(plan.steps);
+
+// Returns:
+// [
+//   { type: 'single', step: { ... } },
+//   { type: 'chain', id: 'chain-1', steps: [...] },
+//   { type: 'single', step: { ... } }
+// ]
+```
+
+## Advanced: Routing Graph
+
+The routing system uses BFS to find intermediary paths:
+
+### Graph Construction
+
+```typescript
+import { buildSwapGraph } from 'components/blocks/rebalance/routing';
+
+interface SwapEdge {
+  from: string;
+  to: string;
+  weight: number;  // Lower = better (derived from success rate)
+}
+
+type SwapGraph = Record<string, SwapEdge[]>;
+
+// Build from auditor data
+const graph = buildSwapGraph(auditResponses);
+
+// Add local history
+import { addLocalHistoryEdges } from 'components/blocks/rebalance/routing';
+
+const swapGroups = Object.values(useSwapTransactionsStore.getState().groups);
+addLocalHistoryEdges(graph, swapGroups);
+```
+
+### Path Selection
+
+```typescript
+import { pickIntermediaryPath } from 'components/blocks/rebalance/routing';
+
+const result = pickIntermediaryPath({
+  from: 'https://mint-a.com',
+  to: 'https://mint-b.com',
+  graph,
+  settings: {
+    maxHops: 3,
+    preferTrusted: true
+  },
+  trustedMintUrls: new Set(trustedMints)
+});
+
+// result.path: ['mint-a', 'mint-m', 'mint-b']
+// result.totalWeight: 0.05
+```
+
+### Local History Candidates
+
+```typescript
+import { getLocalCandidatesForDestination } from 'components/blocks/rebalance/routing';
+
+// Find mints that successfully swapped TO destination in the past
+const candidates = getLocalCandidatesForDestination(
+  swapGroups,
+  toMintUrl,
+  fromMintUrl  // Exclude source
+);
+
+// Returns: ['https://mint-m.com', 'https://mint-n.com']
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Set Conservative Distributions">
+    Avoid setting a single mint to >50% allocation. Distribute across 3-5 mints for redundancy.
+  </Accordion>
+  
+  <Accordion title="Use Minimum Transfer Threshold">
+    Set `minTransferThreshold` to 10-20 sats to avoid wasting fees on micro-transfers:
+    ```typescript
+    const minTransferThreshold = useSettingsStore(state => state.minTransferThreshold);
+    ```
+  </Accordion>
+  
+  <Accordion title="Rebalance Periodically">
+    Run rebalance weekly or when distributions drift >10% from targets.
+  </Accordion>
+  
+  <Accordion title="Monitor Failed Steps">
+    If steps consistently fail for a mint, consider removing it from your trusted list.
+  </Accordion>
+</AccordionGroup>
+
+## Debugging
+
+Rebalance operations log to console with structured debug events:
+
+```typescript
+const appendDebug = (entry: Record<string, unknown>) => {
+  console.log('[REBALANCE]', JSON.stringify({
+    ...entry,
+    _ts: new Date().toISOString()
+  }));
+};
+
+appendDebug({
+  event: 'step_start',
+  stepId: step.id,
+  fromMintUrl,
+  toMintUrl,
+  amount
+});
+```
+
+**Key events:**
+- `step_start` - Transfer step begins
+- `balances_fetched` - Current balances retrieved
+- `fee_headroom_computed` - Dynamic fees calculated
+- `melt_prepared` - Quote received from mint
+- `no_route_auto_routing` - Routing failure, trying middleman
+- `chain_hop_start` - Middleman hop begins
+- `step_done` - Transfer complete
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Mint Swapping" icon="arrow-right-arrow-left" href="/cashu/mint-swapping">
+    Learn about the underlying swap mechanism
+  </Card>
+  
+  <Card title="Know Your Mint" icon="shield-check" href="/cashu/know-your-mint">
+    Use trust signals to set distributions
+  </Card>
+</CardGroup>

@@ -1,0 +1,472 @@
+---
+title: Multi-Account Support
+description: Swipeable account pager with multiple currency units and visual account indicators
+---
+
+## Overview
+
+Sovran supports multiple currency accounts through a swipeable pager interface. Users can switch between SAT, USD, EUR, and other currency units with smooth animations and haptic feedback.
+
+## Account Pager Architecture
+
+The `AccountPagerView` component (`components/blocks/AccountPagerView.tsx`) orchestrates multi-account support:
+
+### Component Structure
+
+```typescript
+interface AccountType {
+  unit: string;
+}
+
+interface AccountPagerViewProps {
+  accounts: AccountType[];
+  setAccount: (account: AccountType) => void;
+  account: AccountType;
+}
+
+export function AccountPagerView({
+  accounts,
+  setAccount,
+  account,
+}: AccountPagerViewProps): React.ReactElement {
+  // Implementation
+}
+```
+
+From `components/blocks/AccountPagerView.tsx:196-210`.
+
+## Swipeable Interface
+
+The pager uses `react-native-web-infinite-swiper` for smooth account switching:
+
+```typescript
+const swiperRef = useRef<any>(null);
+const pagerHeight = Math.max(windowHeight * 0.3, 250);
+
+<View className="w-full" style={{ height: pagerHeight }}>
+  <Swiper
+    containerStyle={{ height: pagerHeight }}
+    controlsEnabled={false}
+    loop
+    infinite
+    from={0}
+    ref={swiperRef}
+    minDistanceForAction={0.1}
+    onIndexChanged={onPageSelected}
+    controlsProps={{ dotsTouchable: true, dotsPos: 'top' }}>
+    {accounts.map((acc, index) => (
+      <VStack key={`${acc.unit}-${index}`} align="center" justify="center" className="flex-1">
+        <Account accounts={accounts} account={acc} pagerHeight={pagerHeight} />
+      </VStack>
+    ))}
+  </Swiper>
+</View>
+```
+
+From `components/blocks/AccountPagerView.tsx:323-341`.
+
+## Page Selection Handler
+
+Account switching triggers haptic feedback:
+
+```typescript
+const onPageSelected = useCallback(
+  async (index: number): Promise<void> => {
+    setAccount(accounts[index]);
+    await EnhancedHaptics.successHaptic();
+  },
+  [accounts, setAccount]
+);
+```
+
+From `components/blocks/AccountPagerView.tsx:229-235`.
+
+## Programmatic Navigation
+
+Accounts can be switched programmatically:
+
+```typescript
+useEffect(() => {
+  const idx = accounts.findIndex((a) => a.unit === account.unit);
+  swiperRef.current?.goTo(idx);
+}, [accounts, account]);
+```
+
+From `components/blocks/AccountPagerView.tsx:237-240`.
+
+## Payment Actions
+
+The account pager integrates send/receive/scan actions:
+
+### Receive Action
+
+```typescript
+const handleReceive = useCallback(() => {
+  router.navigate({
+    pathname: '/(receive-flow)/receive',
+    params: { to: 'sendToken', unit: account.unit },
+  });
+}, [account.unit]);
+```
+
+### Send Action
+
+```typescript
+const handleSend = useCallback(async () => {
+  let balance = 0;
+  try {
+    const balances = await getBalances();
+    balance = balances[selectedMintUrl || ''] || 0;
+  } catch (error) {
+    if (__DEV__) console.error('Failed to get balance:', error);
+  }
+
+  if (balance <= 0) {
+    router.navigate({
+      pathname: '/(send-flow)/mintSelect',
+      params: { to: 'sendToken', unit: account.unit },
+    });
+    return;
+  }
+
+  router.navigate({
+    pathname: '/(send-flow)/currency',
+    params: { to: 'sendToken', unit: account.unit },
+  });
+}, [getBalances, selectedMintUrl, account.unit]);
+```
+
+From `components/blocks/AccountPagerView.tsx:258-279`.
+
+### QR Scanner Action
+
+```typescript
+const handleScanQR = useCallback(async () => {
+  const granted = await handlePermission();
+  if (!granted) return;
+  router.navigate({
+    pathname: '/camera',
+    params: { to: 'sendToken', unit: account.unit },
+  });
+}, [handlePermission, account.unit]);
+```
+
+From `components/blocks/AccountPagerView.tsx:249-256`.
+
+## Platform-Specific Buttons
+
+The pager renders different button styles based on platform:
+
+### iOS - Liquid Glass Buttons
+
+```typescript
+function LiquidCapsuleButton({
+  label,
+  systemIcon,
+  color,
+  onPress,
+}: {
+  label: string;
+  systemIcon: React.ComponentProps<typeof SwiftUIImage>['systemName'];
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <Host style={{ height: BUTTON_H, width: '100%' }} matchContents={false}>
+      <SwiftUIButton
+        modifiers={[
+          buttonStyle('glass'),
+          frame({ height: BUTTON_H, maxWidth: Infinity, alignment: 'center' }),
+        ]}
+        onPress={onPress}>
+        <SwiftUIHStack alignment="center" spacing={8}>
+          <SwiftUIImage systemName={systemIcon} size={18} color={color} />
+          <SwiftUIText
+            modifiers={[
+              font({ size: 14, weight: 'bold' }),
+              foregroundStyle(color),
+            ]}>
+            {label}
+          </SwiftUIText>
+        </SwiftUIHStack>
+      </SwiftUIButton>
+    </Host>
+  );
+}
+```
+
+From `components/blocks/AccountPagerView.tsx:123-158`.
+
+### Android - Liquid Button View
+
+```typescript
+function AndroidLiquidCapsuleButton({
+  label,
+  icon,
+  color,
+  onPress,
+}: {
+  label: string;
+  icon: string;
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <View className="w-full" style={{ height: BUTTON_H }}>
+      <LiquidButtonView
+        title={INVISIBLE_TITLE_WIDE}
+        enabled
+        tint="transparent"
+        blurRadius={3}
+        onPress={onPress}
+        style={{ width: '100%', height: BUTTON_H, borderRadius: BUTTON_H / 2 }}
+      />
+      <View
+        pointerEvents="none"
+        className="absolute inset-0 flex-row items-center justify-center gap-2"
+        style={{ elevation: 1 }}>
+        <Icon name={icon} size={16} color={color} />
+        <Text size={14} style={{ color, fontFamily: 'OxygenBold' }}>
+          {label}
+        </Text>
+      </View>
+    </View>
+  );
+}
+```
+
+From `components/blocks/AccountPagerView.tsx:51-83`.
+
+### Fallback - Blur Buttons
+
+```typescript
+return (
+  <Button
+    text={label}
+    icon={<Icon name={rnIcon} size={16} color={foreground} />}
+    onPress={onPress}
+    variant="secondary"
+    blur={{ intensity: 70, tint: 'dark' }}
+    haptics
+    style={{ margin: 0, marginBottom: 0, width: '100%', minHeight: BUTTON_H }}
+  />
+);
+```
+
+From `components/blocks/AccountPagerView.tsx:309-319`.
+
+## Central QR Button
+
+A floating QR scanner button sits between send/receive:
+
+### iOS Liquid Glass
+
+```typescript
+function LiquidQRButton({
+  tint,
+  color,
+  onPress,
+}: {
+  tint: string;
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <Host style={{ height: QR_SIZE, width: QR_SIZE }} matchContents={false}>
+      <SwiftUIButton
+        modifiers={[
+          buttonStyle('glass'),
+          frame({ height: QR_SIZE, width: QR_SIZE }),
+          glassEffect({
+            shape: 'circle',
+            glass: { tint, variant: 'regular', interactive: true },
+          }),
+        ]}
+        onPress={onPress}>
+        <SwiftUIHStack alignment="center">
+          <SwiftUIImage systemName="qrcode.viewfinder" size={22} color={color} />
+        </SwiftUIHStack>
+      </SwiftUIButton>
+    </Host>
+  );
+}
+```
+
+From `components/blocks/AccountPagerView.tsx:161-189`.
+
+### Android Liquid Button
+
+```typescript
+function AndroidLiquidQRButton({
+  tint,
+  color,
+  onPress,
+}: {
+  tint: string;
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <View
+      className="overflow-hidden"
+      style={{
+        width: QR_SIZE,
+        height: QR_SIZE,
+        borderRadius: QR_SIZE / 2,
+        transform: [{ scale: 1.3 }],
+      }}>
+      <LiquidButtonView
+        title={INVISIBLE_TITLE_SHORT}
+        enabled
+        tint={tint}
+        blurRadius={4}
+        lensX={24}
+        lensY={24}
+        onPress={onPress}
+        style={{ width: '100%', height: '100%' }}
+      />
+      <View
+        pointerEvents="none"
+        className="absolute inset-0 items-center justify-center"
+        style={{ elevation: 1 }}>
+        <Icon name="stash:qr-code" size={24} color={color} />
+      </View>
+    </View>
+  );
+}
+```
+
+From `components/blocks/AccountPagerView.tsx:85-121`.
+
+## Button Layout
+
+Buttons are arranged in a specific layout:
+
+```typescript
+<View
+  className="relative w-full justify-center px-3"
+  style={{ marginTop: 8, height: Math.max(QR_SIZE, BUTTON_H) }}>
+  {/* Send and Receive buttons */}
+  <View className="flex-row gap-3">
+    <View className="flex-1">
+      {renderCapsuleButton('Receive', 'arrow.down.left', 'lucide:arrow-down-left', handleReceive)}
+    </View>
+    <View className="flex-1">
+      {renderCapsuleButton('Send', 'arrow.up.right', 'lucide:arrow-up-right', handleSend)}
+    </View>
+  </View>
+
+  {/* Floating QR button */}
+  <View pointerEvents="box-none" className="absolute inset-x-0 z-[1000] items-center">
+    {supportsLiquidGlass() ? (
+      <LiquidQRButton tint={shadeColor300} color={foreground} onPress={handleScanQR} />
+    ) : useAndroidLiquidButtons ? (
+      <AndroidLiquidQRButton tint={shadeColor300} color={foreground} onPress={handleScanQR} />
+    ) : (
+      {/* Fallback gradient button */}
+    )}
+  </View>
+</View>
+```
+
+From `components/blocks/AccountPagerView.tsx:343-392`.
+
+## Account Display
+
+Each account renders with:
+
+### Currency Icon
+
+```typescript
+const CURRENCY_ICONS: Record<string, React.FC> = {
+  sat: BitcoinMaskIcon,
+  usd: DollarMaskIcon,
+  eur: EuroMaskIcon,
+  gbp: PoundMaskIcon,
+};
+
+const CurrencyIcon = CURRENCY_ICONS[account.unit];
+```
+
+From `components/blocks/Account.tsx:25-37`.
+
+### Balance Display
+
+```typescript
+<VStack align="center" gap={8}>
+  <PrimaryBalance account={account} />
+  <HStack spacing={2}>
+    {accounts.map((acc, index) => {
+      const isActive = acc.unit === account.unit;
+      return (
+        <Text
+          key={index}
+          weight={isActive ? 'bold' : 'regular'}
+          size={16}
+          style={{
+            color: isActive ? foreground : surfaceTertiary,
+            marginTop: 3,
+          }}>
+          •
+        </Text>
+      );
+    })}
+  </HStack>
+</VStack>
+```
+
+From `components/blocks/Account.tsx:46-64`.
+
+## Mint Management Integration
+
+The pager integrates with mint management:
+
+```typescript
+const { getBalances } = useMintManagement();
+const { keys } = useNostrKeysContext();
+const selectedMints = useMintStore((state) => state.selectedMints);
+const selectedMintUrl = keys?.pubkey ? selectedMints[keys.pubkey] : undefined;
+```
+
+From `components/blocks/AccountPagerView.tsx:221-225`.
+
+## Camera Permission Handling
+
+```typescript
+const { handlePermission } = useHandleCameraPermission();
+
+const handleScanQR = useCallback(async () => {
+  const granted = await handlePermission();
+  if (!granted) return;
+  router.navigate({
+    pathname: '/camera',
+    params: { to: 'sendToken', unit: account.unit },
+  });
+}, [handlePermission, account.unit]);
+```
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Swipeable Interface" icon="hand-pointer">
+    Smooth infinite swiper with loop support and haptic feedback
+  </Card>
+  
+  <Card title="Platform Adaptation" icon="mobile">
+    iOS liquid glass, Android liquid buttons, and fallback blur buttons
+  </Card>
+  
+  <Card title="Visual Indicators" icon="circle-dot">
+    Dot indicators show current account position
+  </Card>
+  
+  <Card title="Smart Routing" icon="route">
+    Context-aware navigation based on balance and mint availability
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Wallet Functionality](/features/wallet) - Balance display and management
+- [QR Scanner](/features/qr-scanner) - QR code scanning integration
+- [Ecash Tokens](/features/ecash-tokens) - Token operations

@@ -1,0 +1,546 @@
+---
+title: Know Your Mint
+description: Mint auditing, community ratings, and trust verification in Sovran
+icon: shield-check
+---
+
+## Overview
+
+Because Cashu mints have custody of your Bitcoin, choosing trustworthy mints is critical. Sovran provides two complementary systems for evaluating mints:
+
+1. **Auditor Data** - Automated uptime and success rate monitoring
+2. **KYM (Know Your Mint)** - Community-driven Nostr-based ratings
+
+## Auditor System
+
+Sovran queries the **Cashu Auditor** API to fetch real-time mint health metrics.
+
+### Audit Data Structure
+
+```typescript
+interface AuditInfo {
+  url: string;
+  name: string;
+  state: 'OK' | 'ERROR' | 'OFFLINE';
+  
+  // Swap-based metrics (preferred)
+  successRate?: number;     // 0.0 to 1.0
+  swapTotal?: number;       // Number of swaps in sample
+  swapSuccess?: number;     // Successful swaps
+  avgTimeMs?: number;       // Average successful swap time
+  score?: number;           // 0-5 score derived from successRate
+  
+  // Operation counts
+  auditorData: {
+    name: string;
+    state: string;
+    mints: number;          // Total mint operations
+    melts: number;          // Total melt operations
+    errors: number;         // Total errors
+  };
+}
+```
+
+### Using the Audit Hook
+
+```typescript
+import { useAuditedMint } from 'hooks/coco/useAuditedMint';
+
+function MintHealthIndicator({ mintUrl }: { mintUrl: string }) {
+  const { auditInfo, mintInfo, loading, error } = useAuditedMint(mintUrl);
+  
+  if (loading) return <Skeleton />;
+  if (error) return <Text>Failed to load audit data</Text>;
+  
+  const successRate = auditInfo?.successRate 
+    ? Math.round(auditInfo.successRate * 100) 
+    : 0;
+  
+  return (
+    <View>
+      <Text>State: {auditInfo?.state}</Text>
+      <Text>Success Rate: {successRate}%</Text>
+      <Text>
+        {auditInfo?.swapSuccess} of {auditInfo?.swapTotal} swaps succeeded
+      </Text>
+      <Text>Avg Time: {auditInfo?.avgTimeMs}ms</Text>
+    </View>
+  );
+}
+```
+
+### Batch Loading for Lists
+
+For mint lists, use `useAuditedMints` to load multiple mints efficiently:
+
+```typescript
+import { useAuditedMints } from 'hooks/coco/useAuditedMints';
+
+function MintList({ mintUrls }: { mintUrls: string[] }) {
+  const { getAuditData } = useAuditedMints(mintUrls);
+  
+  return (
+    <>
+      {mintUrls.map((url) => {
+        const auditData = getAuditData(url);
+        return (
+          <MintRow 
+            key={url}
+            url={url}
+            auditData={auditData}
+          />
+        );
+      })}
+    </>
+  );
+}
+```
+
+### Caching Strategy
+
+Audit data is cached in `auditMintStore.ts` with a 5-minute TTL:
+
+```typescript
+import { useAuditMintStore } from 'stores/auditMintStore';
+
+const getCached = useAuditMintStore((state) => state.getCached);
+const setCached = useAuditMintStore((state) => state.setCached);
+const isStale = useAuditMintStore((state) => state.isStale);
+
+// Check cache before fetching
+const cached = getCached(mintUrl);
+if (cached && !isStale(mintUrl)) {
+  // Use cached data
+} else {
+  // Fetch fresh data
+  const result = await auditMint({ mintUrl });
+  if (result.isOk()) {
+    setCached(mintUrl, result.value, mintInfo);
+  }
+}
+```
+
+### Health Badge Variants
+
+```typescript
+function MintStateBadge({ state }: { state: string }) {
+  const variant = state === 'ERROR' ? 'error' : 'success';
+  
+  return (
+    <Badge 
+      variant={variant} 
+      icon={state === 'OK' ? 'fluent:checkmark-16-filled' : 'nonicons:error-16'}
+    >
+      {state}
+    </Badge>
+  );
+}
+```
+
+## KYM (Know Your Mint) Ratings
+
+KYM is a **Nostr-based community rating system** using kind `38000` events.
+
+### Rating Event Structure
+
+```typescript
+// Kind 38000: Cashu mint recommendation
+{
+  kind: 38000,
+  pubkey: '...',  // Reviewer's pubkey
+  content: '[5] Great uptime, fast melts',
+  tags: [
+    ['u', 'https://mint.example.com'],  // Mint URL
+    ['rating', '5']                      // 0-5 score
+  ],
+  created_at: 1234567890
+}
+```
+
+### Fetching KYM Scores
+
+**Single mint:**
+```typescript
+import { useKYMMint } from 'hooks/coco/useKYMMint';
+
+function MintRating({ mintUrl }: { mintUrl: string }) {
+  const { score, recommendations, loading, error } = useKYMMint(mintUrl);
+  
+  if (loading) return <Skeleton />;
+  if (!score) return <Text>No ratings yet</Text>;
+  
+  return (
+    <View>
+      <Text>{score.toFixed(1)} / 5.0</Text>
+      <Text>{recommendations?.length || 0} reviews</Text>
+    </View>
+  );
+}
+```
+
+**Multiple mints (batch):**
+```typescript
+import { useKYMMints } from 'hooks/coco/useKYMMints';
+
+function MintGrid({ mintUrls }: { mintUrls: string[] }) {
+  const { scores, loading } = useKYMMints(mintUrls);
+  
+  return (
+    <>
+      {mintUrls.map((url) => {
+        const normalized = normalizeMintUrlKey(url);
+        const kymData = scores[normalized];
+        
+        return (
+          <MintCard
+            key={url}
+            url={url}
+            score={kymData?.score}
+            loading={loading}
+          />
+        );
+      })}
+    </>
+  );
+}
+```
+
+### Rating Display Component
+
+The info screen includes an animated rating display:
+
+```typescript
+function RatingDisplay({ score }: { score: number }) {
+  const targetRow = Math.max(1, Math.min(5, Math.ceil(score)));
+  const goldPercentage = score / targetRow;
+  
+  return (
+    <HStack>
+      <VStack>
+        <Text>{score.toFixed(1)}</Text>
+        <Text>out of 5</Text>
+      </VStack>
+      
+      <VStack>
+        {[5, 4, 3, 2, 1].map((stars) => (
+          <HStack key={stars}>
+            {/* Star icons */}
+            <ProgressBar 
+              percentage={stars === targetRow ? goldPercentage : 0} 
+            />
+          </HStack>
+        ))}
+      </VStack>
+    </HStack>
+  );
+}
+```
+
+### Reviews Screen
+
+View individual reviews at `app/(mint-flow)/reviews.tsx`:
+
+```typescript
+import { useKYMMint } from 'hooks/coco/useKYMMint';
+
+function ReviewsScreen({ mintUrl }: { mintUrl: string }) {
+  const { recommendations, loading } = useKYMMint(mintUrl);
+  
+  return (
+    <FlatList
+      data={recommendations}
+      renderItem={({ item }) => (
+        <ReviewItem
+          pubkey={item.pubkey}
+          score={item.score}
+          comment={item.comment}
+          created_at={item.created_at}
+        />
+      )}
+    />
+  );
+}
+```
+
+### Nostr Integration
+
+KYM data flows through the Nostr network:
+
+```typescript
+import { useSubscribe } from '@nostr-dev-kit/ndk-mobile';
+import { 
+  isCashuRecommendationEvent,
+  extractMintUrlFromEvent,
+  parseRecommendation 
+} from 'helper/nostrClient';
+
+// Subscribe to kind 38000 events
+const filters = [{ kinds: [38000], limit: 100 }];
+const { events, eose } = useSubscribe({ filters });
+
+// Process events
+events.forEach((event) => {
+  if (!isCashuRecommendationEvent(event)) return;
+  
+  const mintUrl = extractMintUrlFromEvent(event);
+  const recommendation = parseRecommendation(event.content);
+  
+  // recommendation: { score: number, comment: string }
+});
+```
+
+### Caching KYM Data
+
+Ratings are cached in `kymMintStore.ts`:
+
+```typescript
+import { useKYMMintStore } from 'stores/kymMintStore';
+
+const store = useKYMMintStore.getState();
+
+// Cache rating
+store.setCached(mintUrl, avgScore, recommendations);
+
+// Retrieve cached
+const cached = store.getCached(mintUrl);
+if (cached && !store.isStale(mintUrl)) {
+  return cached;
+}
+```
+
+## Mint Info Screen
+
+The comprehensive mint info modal (`app/(mint-flow)/info.tsx`) combines:
+
+### Progress Ring Visualization
+
+```typescript
+function ProgressRing({ 
+  progress,    // 0.0 to 1.0 (success rate)
+  children 
+}) {
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference * (1 - progress);
+  
+  return (
+    <Svg>
+      {/* Background circle (error color) */}
+      <Circle stroke={errorColor} />
+      
+      {/* Progress circle (success color) */}
+      <Circle 
+        stroke={successColor}
+        strokeDasharray={circumference}
+        strokeDashoffset={strokeDashoffset}
+      />
+      
+      {children} {/* Avatar in center */}
+    </Svg>
+  );
+}
+```
+
+### Stats Grid
+
+```typescript
+function StatsGrid({ auditInfo }) {
+  const stats = [
+    {
+      label: 'Success Rate',
+      value: `${(auditInfo.successRate * 100).toFixed(1)}%`,
+      description: `${auditInfo.swapSuccess} of ${auditInfo.swapTotal} swaps`
+    },
+    {
+      label: 'Average Time',
+      value: `${Math.round(auditInfo.avgTimeMs)} ms`,
+      description: 'For successful swaps'
+    },
+    {
+      label: 'Total Mints',
+      value: auditInfo.auditorData.mints,
+      description: 'Total mint operations'
+    },
+    {
+      label: 'Total Melts',
+      value: auditInfo.auditorData.melts,
+      description: 'Total melt operations'
+    }
+  ];
+  
+  return (
+    <View style={styles.statsGrid}>
+      {stats.map((stat) => (
+        <StatCard key={stat.label} {...stat} />
+      ))}
+    </View>
+  );
+}
+```
+
+### Contact Information
+
+```typescript
+function ContactSection({ mintInfo }) {
+  const handleContactPress = async (method: string, info: string) => {
+    switch (method.toLowerCase()) {
+      case 'email':
+        await Linking.openURL(`mailto:${info}`);
+        break;
+      case 'twitter':
+      case 'x':
+        await Linking.openURL(`https://x.com/${info.replace('@', '')}`);
+        break;
+      case 'nostr':
+        const pubkey = npubToPubkey(info);
+        router.navigate('/userMessages', { pubkey });
+        break;
+      default:
+        await Clipboard.setStringAsync(info);
+    }
+  };
+  
+  return (
+    <ListGroup>
+      {mintInfo.contact.map((contact) => (
+        <ListGroup.Item onPress={() => handleContactPress(contact.method, contact.info)}>
+          {/* Contact item UI */}
+        </ListGroup.Item>
+      ))}
+    </ListGroup>
+  );
+}
+```
+
+## Sorting by Trust Signals
+
+The add mints screen sorts by audit data and KYM score:
+
+```typescript
+const sortedMints = useMemo(() => {
+  return [...mints].sort((a, b) => {
+    const auditA = getAuditData(a.url);
+    const auditB = getAuditData(b.url);
+    
+    // Calculate success rates
+    const successRateA = auditA.auditInfo?.successRate;
+    const successRateB = auditB.auditInfo?.successRate;
+    const kymScoreA = kymScores[a.url]?.score;
+    const kymScoreB = kymScores[b.url]?.score;
+    
+    // Sort: success rate desc, then KYM score desc
+    if (successRateA && successRateB && successRateA !== successRateB) {
+      return successRateB - successRateA;
+    }
+    if (kymScoreA && kymScoreB) {
+      return kymScoreB - kymScoreA;
+    }
+    return 0;
+  });
+}, [mints, kymScores, getAuditData]);
+```
+
+## Trust Badges
+
+Display combined trust indicators:
+
+```typescript
+function MintTrustBadges({ mintUrl }) {
+  const { auditInfo } = useAuditedMint(mintUrl);
+  const { score: kymScore } = useKYMMint(mintUrl);
+  
+  const successRate = auditInfo?.successRate 
+    ? Math.round(auditInfo.successRate * 100) 
+    : undefined;
+  
+  return (
+    <HStack gap={8}>
+      {kymScore && (
+        <Badge variant="star" icon="ic:round-star">
+          {kymScore.toFixed(1)}
+        </Badge>
+      )}
+      
+      {successRate !== undefined && (
+        <Badge 
+          variant={successRate >= 95 ? 'success' : 'error'}
+          icon="lucide:activity"
+        >
+          {successRate}%
+        </Badge>
+      )}
+    </HStack>
+  );
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Check Both Metrics">
+    Use both auditor data (objective) and KYM scores (subjective) for a complete picture. A mint with 99% uptime but low community ratings may have other issues.
+  </Accordion>
+  
+  <Accordion title="Verify Contact Info">
+    Before trusting a mint with large amounts, verify the operator has multiple contact methods and a known reputation.
+  </Accordion>
+  
+  <Accordion title="Monitor Over Time">
+    Success rates can fluctuate. Check audit data periodically, especially before moving large amounts.
+  </Accordion>
+  
+  <Accordion title="Start Small">
+    When trying a new mint, start with a small balance and test mint/melt operations before increasing exposure.
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+### Helper Functions
+
+```typescript
+import { auditMint, fetchMintInfo } from 'helper/apiClient';
+
+// Fetch audit data
+const result = await auditMint({ mintUrl });
+if (result.isOk()) {
+  const auditData = result.value;
+}
+
+// Fetch mint info
+const infoResult = await fetchMintInfo(mintUrl);
+if (infoResult.isOk()) {
+  const mintInfo = infoResult.value;
+}
+```
+
+### Nostr Helpers
+
+```typescript
+import { 
+  isCashuRecommendationEvent,
+  extractMintUrlFromEvent,
+  parseRecommendation 
+} from 'helper/nostrClient';
+
+// Validate event
+const isValid = isCashuRecommendationEvent(event);
+
+// Extract mint URL
+const mintUrl = extractMintUrlFromEvent(event);
+
+// Parse content
+const { score, comment } = parseRecommendation(event.content);
+// Returns: { score: number, comment: string }
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Mint Management" icon="building-columns" href="/cashu/mint-management">
+    Add and manage mints
+  </Card>
+  
+  <Card title="Wallet Rebalancing" icon="scale-balanced" href="/cashu/wallet-rebalancing">
+    Distribute balance based on trust signals
+  </Card>
+</CardGroup>

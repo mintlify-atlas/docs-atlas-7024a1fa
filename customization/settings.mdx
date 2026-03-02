@@ -1,0 +1,548 @@
+---
+title: Settings
+description: Complete overview of Sovran's app settings and configuration options
+icon: gear
+---
+
+Sovran provides extensive customization options through the Settings interface. Configure themes, currencies, privacy, security, and advanced developer features.
+
+## Accessing Settings
+
+Tap the **Settings** icon in the navigation bar to access all configuration options.
+
+<Frame>
+  <img src="/images/settings-screen.png" alt="Settings interface" />
+</Frame>
+
+## Settings Categories
+
+<CardGroup cols={2}>
+  <Card title="Account" icon="user">
+    Profile, identity, and Nostr key management
+  </Card>
+  <Card title="Preferences" icon="sliders">
+    Theme, currency, and display settings
+  </Card>
+  <Card title="Security" icon="lock">
+    Passcode, P2PK keys, and recovery
+  </Card>
+  <Card title="Privacy" icon="shield">
+    Location stamping and metadata controls
+  </Card>
+  <Card title="Developer" icon="code">
+    Advanced debugging and experimental features
+  </Card>
+  <Card title="App Info" icon="info">
+    Version, source code, and support
+  </Card>
+</CardGroup>
+
+## Settings Store
+
+All settings are managed through Zustand with AsyncStorage persistence.
+
+### State Interface
+
+```typescript stores/settingsStore.ts
+interface SettingsState {
+  theme: string;                    // Current theme name
+  language: string;                 // UI language (default: 'en')
+  displayBtc: number;               // Sats display mode (0-3)
+  displayCurrency: DisplayCurrency; // Fiat currency ('usd' | 'eur' | 'gbp')
+  passcode: string;                 // In-memory only (never persisted)
+  experimental: boolean;            // Developer mode enabled
+  mockMode: boolean;                // Demo data mode
+  mockOffline: boolean;             // Simulate offline mode
+  termsAccepted: TermsAccepted | null;  // Terms acceptance record
+  hasSeenOnboarding: boolean;       // Onboarding completion
+  quickAccessP2PK: boolean;         // Quick P2PK key access
+  regenerateP2PKOnReceive: boolean; // Auto-rotate P2PK keys
+  sendLocationEnabled: boolean;     // Location metadata stamping
+  minTransferThreshold: number;     // Rebalancing threshold (sats)
+  middlemanRouting: MiddlemanRoutingSettings;  // Swap routing config
+}
+```
+
+### Default Settings
+
+```typescript
+const DEFAULT_SETTINGS: Omit<SettingsState, 'passcode'> = {
+  theme: 'dark',
+  language: 'en',
+  displayBtc: 3,
+  displayCurrency: 'usd',
+  experimental: false,
+  mockMode: false,
+  mockOffline: false,
+  termsAccepted: null,
+  hasSeenOnboarding: false,
+  quickAccessP2PK: false,
+  regenerateP2PKOnReceive: true,
+  sendLocationEnabled: false,
+  minTransferThreshold: 5,
+  middlemanRouting: DEFAULT_MIDDLEMAN_ROUTING,
+};
+```
+
+## Preferences
+
+### Theme
+
+Customize your wallet's visual appearance.
+
+```typescript
+import { useSettingsStore } from 'stores/settingsStore';
+
+const setTheme = useSettingsStore(state => state.setTheme);
+const currentTheme = useSettingsStore(state => state.getTheme());
+
+// Switch theme
+setTheme('ocean');
+```
+
+**Available themes:** 37 total (31 color palettes + 6 wallpapers)
+
+<Card title="View All Themes" icon="palette" href="/customization/themes">
+  Explore all 37 available themes
+</Card>
+
+### Display Currency
+
+Set your preferred fiat currency for balance display.
+
+```typescript
+export type DisplayCurrency = 'usd' | 'eur' | 'gbp';
+
+const setDisplayCurrency = useSettingsStore(state => state.setDisplayCurrency);
+const displayCurrency = useSettingsStore(state => state.getDisplayCurrency());
+
+// Change to EUR
+setDisplayCurrency('eur');
+```
+
+<Card title="Multi-Currency Guide" icon="dollar-sign" href="/customization/multi-currency">
+  Configure currency display options
+</Card>
+
+### Bitcoin Display Mode
+
+Choose how satoshi amounts are displayed:
+
+```typescript
+const setDisplayBtc = useSettingsStore(state => state.setDisplayBtc);
+
+// Mode options:
+// 0 - ₿ icon prefix (BTC)
+// 1 - ⚡ lightning icon suffix
+// 2 - Plain "sats" text
+// 3 - Alternative ₿ icon
+setDisplayBtc(1);
+```
+
+### Language
+
+```typescript
+const setLanguage = useSettingsStore(state => state.setLanguage);
+const currentLanguage = useSettingsStore(state => state.getLanguage());
+
+setLanguage('en');  // Default: English
+```
+
+## Security
+
+### Passcode Protection
+
+<Warning>
+  Passcodes are **never persisted** to storage. They exist only in memory during the session.
+</Warning>
+
+```typescript
+const setPasscode = useSettingsStore(state => state.setPasscode);
+const getPasscode = useSettingsStore(state => state.getPasscode);
+const clearPasscode = useSettingsStore(state => state.clearPasscode);
+
+// Set temporary passcode
+setPasscode('1234');
+
+// Clear on logout
+clearPasscode();
+```
+
+### P2PK Key Management
+
+Navigate to **Settings → Security → P2PK Keys** to manage your Pay-to-Public-Key keys.
+
+#### Quick Access
+
+```typescript
+const setQuickAccessP2PK = useSettingsStore(state => state.setQuickAccessP2PK);
+const quickAccessEnabled = useSettingsStore(state => state.getQuickAccessP2PK());
+
+setQuickAccessP2PK(true);  // Enable quick access
+```
+
+#### Auto-Regenerate on Receive
+
+```typescript
+const setRegenerateP2PKOnReceive = useSettingsStore(state => state.setRegenerateP2PKOnReceive);
+const autoRotate = useSettingsStore(state => state.getRegenerateP2PKOnReceive());
+
+setRegenerateP2PKOnReceive(true);  // Auto-rotate keys (default: true)
+```
+
+### Wallet Recovery
+
+<Info>
+  Recovery options are only visible when **Developer Mode** is enabled.
+</Info>
+
+Access via **Settings → Recovery → Recover Wallet** (when developer mode active).
+
+## Privacy
+
+### Location Stamping
+
+Optionally attach approximate location metadata to transactions.
+
+```typescript
+const setSendLocationEnabled = useSettingsStore(state => state.setSendLocationEnabled);
+const locationEnabled = useSettingsStore(state => state.getSendLocationEnabled());
+
+setSendLocationEnabled(false);  // Disable location stamping (default)
+```
+
+<Warning>
+  Location data is **only stored locally** on your device. It is never transmitted to mints or third parties.
+</Warning>
+
+## Advanced Settings
+
+### Swap Routing Configuration
+
+Configure intermediary mint routing for cross-mint swaps.
+
+```typescript
+export interface MiddlemanRoutingSettings {
+  maxHops: number;           // Max intermediary mints (1-2)
+  maxFee: number;            // Max total fee in sats
+  minSuccessRate: number;    // Min success rate (0-1, e.g., 0.9 = 90%)
+  requireLastOk: boolean;    // Require last swap was successful
+  trustMode: MiddlemanTrustMode;  // 'trusted_only' | 'allow_untrusted'
+}
+
+const DEFAULT_MIDDLEMAN_ROUTING: MiddlemanRoutingSettings = {
+  maxHops: 2,
+  maxFee: 5,
+  minSuccessRate: 0.9,
+  requireLastOk: true,
+  trustMode: 'trusted_only',
+};
+```
+
+#### Update Routing Settings
+
+```typescript
+const setMiddlemanRouting = useSettingsStore(state => state.setMiddlemanRouting);
+
+setMiddlemanRouting({
+  maxFee: 10,              // Allow up to 10 sats fee
+  trustMode: 'allow_untrusted',  // Use any mint as intermediary
+});
+```
+
+Access via **Settings → Preferences → Swap Routing**.
+
+### Rebalancing Threshold
+
+Set the minimum transfer amount for automatic rebalancing:
+
+```typescript
+const setMinTransferThreshold = useSettingsStore(state => state.setMinTransferThreshold);
+const threshold = useSettingsStore(state => state.getMinTransferThreshold());
+
+setMinTransferThreshold(10);  // Only rebalance transfers ≥10 sats
+```
+
+## Developer Mode
+
+Unlock advanced debugging tools by **triple-tapping** the app version in Settings.
+
+### Enabling Developer Mode
+
+```tsx app/settings-pages/index.tsx
+const handleVersionPress = useCallback(() => {
+  const now = Date.now();
+  if (now - lastTapRef.current > TRIPLE_TAP_WINDOW_MS) {
+    tapCountRef.current = 0;
+  }
+  tapCountRef.current += 1;
+  lastTapRef.current = now;
+
+  if (tapCountRef.current >= 3) {
+    tapCountRef.current = 0;
+    setDevMode(!devMode);
+    devModePopup(!devMode);  // Show confirmation
+  }
+}, [devMode, setDevMode]);
+```
+
+### Developer Features
+
+<AccordionGroup>
+  <Accordion title="Export Database">
+    Export the complete SQLite database for debugging:
+    
+    ```typescript
+    import { CocoManager } from 'helper/coco/manager';
+    
+    await CocoManager.exportDatabase();
+    ```
+  </Accordion>
+
+  <Accordion title="Free Reserved Proofs">
+    Rollback stuck operations and release orphaned proof reservations:
+    
+    ```typescript
+    const result = await CocoManager.freeAllReservedProofs();
+    
+    console.log({
+      totalReservedProofs: result.totalReservedProofs,
+      rolledBackSendOperations: result.rolledBackSendOperations,
+      rolledBackMeltOperations: result.rolledBackMeltOperations,
+      releasedOrphanedReservations: result.releasedOrphanedReservations,
+      errors: result.errors,
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Storage Inspector">
+    View all AsyncStorage and SQLite data:
+    
+    Navigate to **Settings → Developer → Storage Inspector**.
+  </Accordion>
+
+  <Accordion title="Mock Mode">
+    Enable demo data for testing:
+    
+    ```typescript
+    const setMockMode = useSettingsStore(state => state.setMockMode);
+    setMockMode(true);  // Activates mock data store
+    ```
+  </Accordion>
+
+  <Accordion title="Mock Offline">
+    Simulate offline network conditions:
+    
+    ```typescript
+    const setMockOffline = useSettingsStore(state => state.setMockOffline);
+    setMockOffline(true);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Terms & Onboarding
+
+### Accept Terms
+
+```typescript
+const acceptTerms = useSettingsStore(state => state.acceptTerms);
+const isTermsAccepted = useSettingsStore(state => state.isTermsAccepted());
+
+if (!isTermsAccepted()) {
+  acceptTerms(new Date().toISOString());
+}
+```
+
+### Complete Onboarding
+
+```typescript
+const completeOnboarding = useSettingsStore(state => state.completeOnboarding);
+const hasSeenOnboarding = useSettingsStore(state => state.hasSeenOnboarding);
+
+if (!hasSeenOnboarding) {
+  // Show onboarding flow
+  completeOnboarding();
+}
+```
+
+## Utility Methods
+
+### Get All Settings
+
+```typescript
+const getAllSettings = useSettingsStore(state => state.getAllSettings);
+const settings = getAllSettings();
+
+console.log(settings);
+// → { theme: 'dark', displayCurrency: 'usd', ... }
+```
+
+### Reset Settings
+
+```typescript
+const resetSettings = useSettingsStore(state => state.resetSettings);
+
+// Restore all defaults (except passcode)
+resetSettings();
+```
+
+### Clear All Data
+
+<Warning>
+  This permanently deletes all settings from AsyncStorage. This action cannot be undone.
+</Warning>
+
+```typescript
+const clearAllData = useSettingsStore(state => state.clearAllData);
+
+await clearAllData();
+```
+
+## Settings Persistence
+
+Settings are persisted using Zustand's `persist` middleware with AsyncStorage.
+
+### Partialize Strategy
+
+```typescript
+partialize: (state) => ({
+  theme: state.theme,
+  language: state.language,
+  displayBtc: state.displayBtc,
+  displayCurrency: state.displayCurrency,
+  experimental: state.experimental,
+  mockMode: state.mockMode,
+  mockOffline: state.mockOffline,
+  termsAccepted: state.termsAccepted,
+  hasSeenOnboarding: state.hasSeenOnboarding,
+  quickAccessP2PK: state.quickAccessP2PK,
+  regenerateP2PKOnReceive: state.regenerateP2PKOnReceive,
+  sendLocationEnabled: state.sendLocationEnabled,
+  minTransferThreshold: state.minTransferThreshold,
+  middlemanRouting: state.middlemanRouting,
+  // passcode is NEVER persisted
+}),
+```
+
+### Rehydration
+
+```typescript
+onRehydrateStorage: () => (state, error) => {
+  if (error) {
+    console.warn('SettingsStore: Failed to rehydrate:', error);
+    return;
+  }
+  if (state?.mockMode) {
+    // Reactivate mock data if it was enabled
+    const { useMockDataStore } = require('stores/mockDataStore');
+    useMockDataStore.getState().activate();
+  }
+},
+```
+
+## Settings UI Components
+
+### Section Component
+
+Groups related settings under a labeled section:
+
+```tsx app/settings-pages/index.tsx
+export const Section: React.FC<{
+  title: string;
+  children: React.ReactNode;
+  isDanger?: boolean;
+}> = ({ title, children, isDanger }) => {
+  const danger = useThemeColor('danger');
+
+  return (
+    <View className="py-3">
+      <Text
+        className="text-foreground/50 my-2 ml-3 uppercase tracking-wide"
+        size={13}
+        medium
+        style={isDanger ? { color: danger } : undefined}>
+        {title}
+      </Text>
+      <View className="overflow-hidden rounded-xl">{children}</View>
+    </View>
+  );
+};
+```
+
+### Row Button Component
+
+Navigable settings row with label and optional value:
+
+```tsx
+export const RowButton: React.FC<{
+  label: string;
+  value?: string;
+  onPress?: () => void;
+  href?: string;
+  isDanger?: boolean;
+  leftIcon?: React.ReactNode;
+  rightIcon?: React.ReactNode;
+}> = ({ label, value, onPress, href, isDanger, leftIcon, rightIcon }) => {
+  // ... renders interactive row
+};
+```
+
+### Usage Example
+
+```tsx
+<Section title="Preferences">
+  <ListGroup variant="secondary">
+    <SettingsListLinkItem href="/customization/themes" title="Theme" />
+    <Separator className="mx-4" />
+    <SettingsListLinkItem href="/advanced/swap-routing" title="Swap Routing" />
+  </ListGroup>
+</Section>
+```
+
+## Best Practices
+
+<Tip>
+  Always use the store's getter methods instead of direct state access:
+  
+  ```typescript
+  // Good
+  const theme = useSettingsStore(state => state.getTheme());
+  
+  // Avoid
+  const theme = useSettingsStore(state => state.theme);
+  ```
+</Tip>
+
+<Warning>
+  Never persist sensitive data like passcodes:
+  
+  ```typescript
+  // Passcode excluded from partialize
+  partialize: (state) => ({
+    // ... all settings except passcode
+  })
+  ```
+</Warning>
+
+<Tip>
+  Validate settings before applying:
+  
+  ```typescript
+  if (THEMES[themeName as ThemeName]) {
+    setTheme(themeName);
+  } else {
+    console.warn(`Invalid theme: ${themeName}`);
+  }
+  ```
+</Tip>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Themes" icon="palette" href="/customization/themes">
+    Explore 37 visual themes
+  </Card>
+  <Card title="Multi-Currency" icon="dollar-sign" href="/customization/multi-currency">
+    Configure currency display
+  </Card>
+</CardGroup>

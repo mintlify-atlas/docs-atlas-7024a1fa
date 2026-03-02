@@ -1,0 +1,416 @@
+---
+title: Transaction Timelines
+description: Live timeline showing transaction progress from creation to completion
+---
+
+## Overview
+
+Sovran provides detailed transaction timelines that show the progress of each payment through its lifecycle. The timeline displays state transitions, timestamps, and helpful context about each step.
+
+## Transaction Types
+
+Each transaction type has its own timeline progression:
+
+### Mint Transactions (Receiving Lightning)
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const MINT_STATES = [MintQuoteState.UNPAID, MintQuoteState.PAID, MintQuoteState.ISSUED] as const;
+
+const MINT_STATE_LABELS: Record<string, string> = {
+  [MintQuoteState.UNPAID]: 'Waiting for payment',
+  [MintQuoteState.PAID]: 'Payment received',
+  [MintQuoteState.ISSUED]: 'Complete',
+};
+```
+
+**Timeline Progression:**
+
+1. **Waiting for payment**: Invoice created, awaiting payment
+2. **Payment received**: Lightning payment confirmed
+3. **Complete**: Ecash issued and added to wallet
+
+### Melt Transactions (Sending Lightning)
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const MELT_STATES = [MeltQuoteState.UNPAID, MeltQuoteState.PENDING, MeltQuoteState.PAID] as const;
+
+const MELT_STATE_LABELS: Record<string, string> = {
+  [MeltQuoteState.UNPAID]: 'Ready to send',
+  [MeltQuoteState.PENDING]: 'Sending',
+  [MeltQuoteState.PAID]: 'Sent',
+};
+```
+
+**Timeline Progression:**
+
+1. **Ready to send**: Quote created, ready to execute
+2. **Sending**: Payment in progress
+3. **Sent**: Lightning payment completed
+
+### Send Transactions (Ecash)
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const SEND_STATES = ['prepared', 'pending', 'finalized'] as const;
+
+const SEND_STATE_LABELS: Record<string, string> = {
+  prepared: 'Created',
+  nostrSent: 'Delivered',
+  pending: 'Pending',
+  finalized: 'Claimed',
+  rolledBack: 'Cancelled',
+};
+```
+
+**Standard Timeline:**
+
+1. **Created**: Token prepared and ready to share
+2. **Pending**: Waiting for recipient to claim
+3. **Claimed**: Recipient has redeemed the token
+
+**Payment Request Timeline** (via Nostr):
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const PAYMENT_REQUEST_STATES = ['prepared', 'nostrSent', 'pending', 'finalized'] as const;
+```
+
+1. **Created**: Token created for payment request
+2. **Delivered**: Sent via Nostr DM
+3. **Pending**: Waiting for recipient
+4. **Claimed**: Recipient has redeemed
+
+### Receive Transactions (Ecash)
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const RECEIVE_STATES = ['pending', 'redeemed'] as const;
+
+const RECEIVE_STATE_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  redeemed: 'Added to wallet',
+  alreadySpent: 'Already spent',
+};
+```
+
+**Timeline Progression:**
+
+1. **Pending**: Token received, not yet redeemed
+2. **Added to wallet**: Token successfully claimed
+
+## Timeline Components
+
+### Step Types
+
+Each timeline step has a visual type:
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+type TimelineStepType =
+  | 'complete'      // Completed step (checkmark)
+  | 'current'       // Current active step (checkmark)
+  | 'next-pending'  // Next expected step (clock)
+  | 'future-small'  // Future step (small dot)
+  | 'expired'       // Transaction expired (X)
+  | 'rolled-back'   // Transaction cancelled (refresh)
+  | 'already-spent' // Already claimed elsewhere (warning)
+  | 'success';      // Final success state (checkmark)
+```
+
+### Visual Indicators
+
+**Timeline Dots:**
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+function TimelineDot({ stepType, greenColor, redColor, orangeColor, greyColor }: TimelineDotProps) {
+  const dotSize = 14;
+  const iconSize = 14;
+
+  // Future small dot
+  if (stepType === 'future-small') {
+    return (
+      <View
+        style={{
+          width: iconSize / 2,
+          height: iconSize / 2,
+          borderRadius: iconSize / 2,
+          backgroundColor: greyColor,
+          marginHorizontal: iconSize / 2,
+        }}
+      />
+    );
+  }
+
+  // Next pending with clock icon
+  if (stepType === 'next-pending') {
+    const bg = opacity(greyColor, 0.18);
+    const border = opacity(greyColor, 0.32);
+    return (
+      <View
+        style={{
+          width: 20,
+          height: 20,
+          borderRadius: dotSize / 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: bg,
+          borderWidth: 1,
+          borderColor: border,
+        }}>
+        <Icon name="mdi:clock-outline" color={opacity('#FFFFFF', 0.7)} size={iconSize} />
+      </View>
+    );
+  }
+
+  let backgroundColor = greenColor;
+  let iconName = 'fluent:checkmark-16-filled';
+
+  switch (stepType) {
+    case 'expired':
+      backgroundColor = redColor;
+      iconName = 'material-symbols:close-rounded';
+      break;
+    case 'rolled-back':
+      backgroundColor = orangeColor;
+      iconName = 'ic:round-refresh';
+      break;
+    case 'already-spent':
+      backgroundColor = orangeColor;
+      iconName = 'mdi:alert-circle';
+      break;
+  }
+
+  const bg = opacity(backgroundColor, 0.18);
+  const border = opacity(backgroundColor, 0.32);
+
+  return (
+    <View
+      style={{
+        width: 20,
+        height: 20,
+        borderRadius: dotSize / 2,
+        backgroundColor: bg,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: border,
+      }}>
+      <Icon name={iconName} color={backgroundColor} size={iconSize} />
+    </View>
+  );
+}
+```
+
+**Connecting Lines:**
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+function TimelineLine({
+  lineType,
+  greenColor,
+  redColor,
+  orangeColor,
+  greyColor,
+}: TimelineLineProps) {
+  const lineWidth = 3;
+  const lineHeight = 50;
+
+  // Gradient lines for terminal states
+  if (lineType === 'expired-gradient' || lineType === 'rolled-back-gradient') {
+    const endColor = lineType === 'expired-gradient' ? redColor : orangeColor;
+    return (
+      <Svg width={lineWidth} height={lineHeight} style={{ marginVertical: 4 }}>
+        <Defs>
+          <LinearGradient id={`gradient-${lineType}`} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%" stopColor={greenColor} />
+            <Stop offset="100%" stopColor={endColor} />
+          </LinearGradient>
+        </Defs>
+        <Rect
+          x={0}
+          y={0}
+          width={lineWidth}
+          height={lineHeight}
+          rx={lineWidth / 2}
+          ry={lineWidth / 2}
+          fill={`url(#gradient-${lineType})`}
+        />
+      </Svg>
+    );
+  }
+
+  // Solid color lines
+  const color = lineType === 'complete' ? greenColor : greyColor;
+  return (
+    <View
+      style={{
+        width: lineWidth,
+        height: lineHeight,
+        backgroundColor: color,
+        borderRadius: lineWidth / 2,
+        marginVertical: 4,
+      }}
+    />
+  );
+}
+```
+
+## Real-time Updates
+
+Timelines update in real-time for pending transactions:
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+// Update time every second for real-time countdown
+useEffect(() => {
+  const shouldUpdate =
+    (historyEntry.type === 'melt' && meltQuote?.expiry) ||
+    (historyEntry.type === 'mint' &&
+      (historyEntry as MintHistoryEntry).state === MintQuoteState.UNPAID);
+
+  if (shouldUpdate) {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }
+}, [meltQuote, historyEntry]);
+```
+
+## Expiry Tracking
+
+For transactions that can expire, the timeline shows time remaining:
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const getExpiryBadge = (): string | null => {
+  if (historyEntry.type === 'melt' && meltQuote && !meltQuoteExpired(meltQuote, currentTime)) {
+    const expiryInfo = getMeltQuoteTimeUntilExpiry(meltQuote, currentTime);
+    if (expiryInfo) return expiryInfo;
+  }
+
+  if (historyEntry.type === 'mint') {
+    const mintTx = historyEntry as MintHistoryEntry;
+    if (mintTx.state === MintQuoteState.UNPAID && !mintHistoryEntryExpired(mintTx)) {
+      const expiryInfo = getMintHistoryEntryTimeUntilExpiry(mintTx);
+      if (expiryInfo) return expiryInfo;
+    }
+  }
+
+  return null;
+};
+```
+
+## Transaction Header
+
+Each timeline includes a header showing the amount and icon:
+
+```typescript components/blocks/Transaction/HistoryEntryHeader.tsx
+export function HistoryEntryHeader({
+  historyEntry,
+  pendingData,
+  recipientProfile,
+  isLoading,
+}: HistoryEntryHeaderProps) {
+  const amount = historyEntry?.amount ?? pendingData?.amount ?? 0;
+  const unit = historyEntry?.unit ?? pendingData?.unit ?? 'sat';
+  const type = historyEntry?.type ?? pendingData?.type ?? 'send';
+
+  const isSend = isOutgoingTransaction({ type });
+  const isReceive = !isSend;
+
+  return (
+    <HStack align="center" justify="space-between" className="p-5 pb-0 pt-0">
+      <VStack>
+        <HStack align="center">
+          <Text
+            overpass
+            size={isSend ? 32 : 24}
+            color={isSend ? danger : success}
+            style={{ opacity: 0.9 }}>
+            {isSend ? '-' : '+'}
+          </Text>
+          <AmountFormatter
+            amount={amount}
+            unit={unit}
+            size={28}
+            weight="heavy"
+            color={isReceive ? success : danger}
+          />
+        </HStack>
+      </VStack>
+      {renderIcon()}
+    </HStack>
+  );
+}
+```
+
+## Mint Information
+
+Timelines can display the mint being used:
+
+```typescript components/blocks/Transaction/HistoryEntryRefresh.tsx
+export function HistoryEntryRefresh({ mintInfo, historyEntry, onPress }: HistoryEntryRefreshProps) {
+  const statusLabel =
+    historyEntry.type === 'send'
+      ? historyEntry.state === 'finalized'
+        ? 'Sent with'
+        : 'Sending with'
+      : historyEntry.type === 'receive'
+        ? historyEntry.state === 'redeemed'
+          ? 'Received with'
+          : 'Receiving with'
+        : 'Processing with';
+
+  return (
+    <ListGroup.Item disabled>
+      <ListGroup.ItemPrefix>
+        <Avatar
+          picture={mintInfo?.icon_url || undefined}
+          size={40}
+          variant="mint"
+          name={mintInfo?.name}
+          alt={`${mintInfo?.name || 'Mint'} icon`}
+        />
+      </ListGroup.ItemPrefix>
+      <ListGroup.ItemContent>
+        <ListGroup.ItemTitle className="font-normal">{statusLabel}</ListGroup.ItemTitle>
+        <ListGroup.ItemDescription className="text-foreground text-base font-bold">
+          {mintInfo?.name}
+        </ListGroup.ItemDescription>
+      </ListGroup.ItemContent>
+    </ListGroup.Item>
+  );
+}
+```
+
+## Status Labels
+
+The timeline generates contextual status labels:
+
+```typescript components/blocks/Transaction/HistoryEntryTimeline.tsx
+const getCardLabel = (
+  historyEntry: HistoryEntry,
+  timeline: TimelineItem[],
+  tokenCreated?: boolean,
+  nostrSent?: boolean
+): string => {
+  const isFailed = timeline.some(
+    (item) =>
+      item.stepType === 'expired' ||
+      item.stepType === 'rolled-back' ||
+      item.stepType === 'already-spent'
+  );
+
+  let status = '';
+
+  switch (historyEntry.type) {
+    case 'mint':
+      if (isFailed) {
+        status = 'Failed';
+      } else if (mintTx.state === MintQuoteState.ISSUED) {
+        status = 'Complete';
+      } else if (mintTx.state === MintQuoteState.PAID) {
+        status = 'In Progress';
+      } else {
+        status = 'Awaiting Payment';
+      }
+      return `Receive • ${status}`;
+    // ... other types
+  }
+};
+```

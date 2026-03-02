@@ -1,0 +1,659 @@
+---
+title: Scripts Reference
+description: Complete guide to development, build, and testing scripts
+icon: terminal
+---
+
+Sovran includes a comprehensive set of scripts for development, building, testing, and deployment. This guide covers all available npm/yarn scripts.
+
+## Development Scripts
+
+### Start Development Server
+
+Launch the Expo development server:
+
+<CodeGroup>
+```bash yarn
+yarn start
+```
+
+```bash npm
+npm start
+```
+</CodeGroup>
+
+This starts the Metro bundler and opens the Expo developer tools. From there you can:
+- Press `i` to open iOS simulator
+- Press `a` to open Android emulator  
+- Scan the QR code with Expo Go on a physical device
+
+### Run on Platforms
+
+#### iOS
+
+<Tabs>
+  <Tab title="Production Build">
+    <CodeGroup>
+    ```bash yarn
+    yarn ios
+    ```
+    
+    ```bash npm
+    npm run ios
+    ```
+    </CodeGroup>
+    
+    Builds and runs the app on the iOS simulator using production settings.
+  </Tab>
+  
+  <Tab title="Development Mode">
+    <CodeGroup>
+    ```bash yarn
+    yarn start:emulator:ios
+    ```
+    
+    ```bash npm
+    npm run start:emulator:ios
+    ```
+    </CodeGroup>
+    
+    Runs `expo run:ios` with development mode enabled.
+  </Tab>
+</Tabs>
+
+#### Android
+
+<Tabs>
+  <Tab title="Production Build">
+    <CodeGroup>
+    ```bash yarn
+    yarn android
+    ```
+    
+    ```bash npm
+    npm run android
+    ```
+    </CodeGroup>
+    
+    Builds and runs the app on the Android emulator using production settings.
+  </Tab>
+  
+  <Tab title="Development Mode">
+    <CodeGroup>
+    ```bash yarn
+    yarn start:emulator:android
+    ```
+    
+    ```bash npm
+    npm run start:emulator:android
+    ```
+    </CodeGroup>
+    
+    Runs `expo run:android` with development mode enabled.
+  </Tab>
+</Tabs>
+
+## Build Scripts
+
+### Prebuild
+
+Generate native iOS and Android projects:
+
+<CodeGroup>
+```bash yarn
+yarn prebuild
+```
+
+```bash npm
+npm run prebuild
+```
+</CodeGroup>
+
+Runs `expo prebuild --clean` which:
+- Deletes existing `ios/` and `android/` directories
+- Regenerates native projects from `app.json` configuration
+- Applies all Expo config plugins
+
+<Info>
+Run this after:
+- Adding new native dependencies
+- Modifying `app.json` plugins
+- Changing native permissions
+</Info>
+
+### EAS Build - iOS
+
+<Tabs>
+  <Tab title="Production">
+    <CodeGroup>
+    ```bash yarn
+    yarn build:ios
+    ```
+    
+    ```bash npm
+    npm run build:ios
+    ```
+    </CodeGroup>
+    
+    Builds iOS for production using EAS Build:
+    - Platform: `ios`
+    - Profile: `production`
+    - Non-interactive mode
+    - Auto-submit to App Store
+    
+    **Full command**: `eas build --platform ios --profile production --non-interactive --auto-submit`
+  </Tab>
+  
+  <Tab title="Development">
+    <CodeGroup>
+    ```bash yarn
+    yarn build:dev:ios
+    ```
+    
+    ```bash npm
+    npm run build:dev:ios
+    ```
+    </CodeGroup>
+    
+    Builds iOS for development using EAS Build:
+    - Platform: `ios`
+    - Profile: `development`
+    - Non-interactive mode
+    - Development client enabled
+    - Internal distribution
+    
+    **Full command**: `eas build --platform ios --profile development --non-interactive`
+  </Tab>
+</Tabs>
+
+### EAS Build - Android
+
+<Tabs>
+  <Tab title="Development">
+    <CodeGroup>
+    ```bash yarn
+    yarn build:dev:android
+    ```
+    
+    ```bash npm
+    npm run build:dev:android
+    ```
+    </CodeGroup>
+    
+    Builds Android for development using EAS Build:
+    - Platform: `android`
+    - Profile: `development`
+    - Development client enabled
+    
+    **Full command**: `eas build --platform android --profile development`
+  </Tab>
+  
+  <Tab title="Preview APK">
+    <CodeGroup>
+    ```bash yarn
+    yarn build:android:apk
+    ```
+    
+    ```bash npm
+    npm run build:android:apk
+    ```
+    </CodeGroup>
+    
+    Builds Android APK for preview/testing:
+    - Platform: `android`
+    - Profile: `preview`
+    - Output: APK file
+    - Internal distribution
+    
+    **Full command**: `eas build -p android --profile preview`
+  </Tab>
+</Tabs>
+
+<Note>
+**EAS Build Profiles** are configured in `eas.json`:
+- `development` - Dev client, internal distribution
+- `preview` - Testing builds, internal distribution  
+- `production` - Production builds, auto-increment version
+</Note>
+
+## Submission Scripts
+
+Submit builds to app stores using EAS Submit:
+
+### iOS App Store
+
+<CodeGroup>
+```bash yarn
+yarn submit:ios
+```
+
+```bash npm
+npm run submit:ios
+```
+</CodeGroup>
+
+**Configuration** (eas.json):
+```json
+{
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "business@sovranbitcoin.com",
+        "ascAppId": "6499554529",
+        "appleTeamId": "2ZTL7KLN2V"
+      }
+    }
+  }
+}
+```
+
+### Android Play Store
+
+<CodeGroup>
+```bash yarn
+yarn submit:android
+```
+
+```bash npm
+npm run submit:android
+```
+</CodeGroup>
+
+Submits the latest Android build to Google Play Console.
+
+## Code Quality Scripts
+
+<Warning>
+**Pre-Commit Requirement**: All five code quality checks must pass before committing code.
+</Warning>
+
+### Linting
+
+Run ESLint to check for code issues:
+
+<CodeGroup>
+```bash yarn
+yarn lint
+```
+
+```bash npm
+npm run lint
+```
+</CodeGroup>
+
+**Configuration**:
+- Extends `eslint-config-expo`
+- Prettier integration
+- Unused imports detection
+- TypeScript support
+
+**Fix automatically**:
+```bash
+yarn lint --fix
+```
+
+### Type Checking
+
+Run TypeScript compiler to check types:
+
+<CodeGroup>
+```bash yarn
+yarn type-check
+```
+
+```bash npm
+npm run type-check
+```
+</CodeGroup>
+
+Runs `tsc --noEmit` to validate TypeScript without emitting files.
+
+**Common issues**:
+- Missing type imports
+- Incorrect prop types
+- Untyped function parameters
+
+### Code Formatting
+
+<Tabs>
+  <Tab title="Check Formatting">
+    <CodeGroup>
+    ```bash yarn
+    yarn pretty:check
+    ```
+    
+    ```bash npm
+    npm run pretty:check
+    ```
+    </CodeGroup>
+    
+    Checks if files are formatted correctly without modifying them.
+    
+    **Pattern**: `./**/*.{js,jsx,mjs,cjs,ts,tsx,json}`
+  </Tab>
+  
+  <Tab title="Format Files">
+    <CodeGroup>
+    ```bash yarn
+    yarn pretty
+    ```
+    
+    ```bash npm
+    npm run pretty
+    ```
+    </CodeGroup>
+    
+    Formats all files using Prettier.
+    
+    **Plugins**:
+    - `prettier-plugin-tailwindcss` - Sorts Tailwind classes
+  </Tab>
+</Tabs>
+
+### Find Dead Code
+
+<CodeGroup>
+```bash yarn
+yarn knip
+```
+
+```bash npm
+npm run knip
+```
+</CodeGroup>
+
+Runs Knip to find:
+- Unused exports
+- Unused dependencies
+- Unreachable code
+- Duplicate exports
+
+**Configuration**: `knip.json`
+
+### Testing
+
+Run Jest unit tests:
+
+<CodeGroup>
+```bash yarn
+yarn test
+```
+
+```bash npm
+npm test
+```
+</CodeGroup>
+
+**Test framework**: Jest with `jest-expo` preset
+
+## UI Testing
+
+### Maestro Tests
+
+Run end-to-end UI tests with Maestro:
+
+<CodeGroup>
+```bash yarn
+yarn maestro
+```
+
+```bash npm
+npm run maestro
+```
+</CodeGroup>
+
+Runs all Maestro test flows in `.maestro/` directory.
+
+**Prerequisites**:
+- Install Maestro CLI: `brew tap mobile-dev-inc/tap && brew install maestro`
+- Build app for simulator/emulator
+- Ensure device is running
+
+## Build Utilities
+
+### Theme Generation
+
+Build background theme metadata:
+
+<CodeGroup>
+```bash yarn
+yarn build:themes
+```
+
+```bash npm
+npm run build:themes
+```
+</CodeGroup>
+
+Runs `scripts/build-background-themes.js` to:
+- Extract colors from background images
+- Generate theme metadata
+- Create palette definitions
+- Output to `scripts/background-themes-metadata.json`
+
+### Screenshot Utilities
+
+Resize and optimize app screenshots:
+
+<CodeGroup>
+```bash yarn
+yarn screenshots
+```
+
+```bash npm
+npm run screenshots
+```
+</CodeGroup>
+
+Runs `scripts/resize-screenshots.js` to:
+- Resize screenshots for App Store
+- Optimize image sizes
+- Generate required dimensions
+
+## Automation Scripts
+
+### FreedomStore Release
+
+Create a pull request to FreedomStore:
+
+<CodeGroup>
+```bash yarn
+yarn release:freedomstore:pr
+```
+
+```bash npm
+npm run release:freedomstore:pr
+```
+</CodeGroup>
+
+Runs `scripts/create-freedomstore-pr.sh` which:
+- Clones FreedomStore repository
+- Updates Sovran metadata
+- Creates a pull request
+- Automates release process
+
+## Lifecycle Hooks
+
+### Post-Install
+
+Automatically runs after `yarn install` or `npm install`:
+
+```json
+{
+  "scripts": {
+    "postinstall": "patch-package"
+  }
+}
+```
+
+Applies patches from `patches/` directory:
+- `coco-cashu-core+1.1.2-rc.47.patch`
+- `cashu-kym+0.4.1.patch`
+
+<Info>
+Patches are created with `npx patch-package <package-name>` after modifying node_modules.
+</Info>
+
+## Script Execution Order
+
+For a typical development workflow:
+
+```bash
+# 1. Install dependencies
+yarn install
+
+# 2. Start development server
+yarn start
+
+# 3. Run on device (separate terminal)
+yarn ios  # or yarn android
+
+# 4. Before committing:
+yarn lint
+yarn type-check
+yarn pretty:check
+yarn knip
+yarn test
+
+# 5. Format if needed
+yarn pretty
+
+# 6. Commit changes
+git add .
+git commit -m "feat: add new feature"
+```
+
+## Production Build Workflow
+
+### iOS Production Release
+
+```bash
+# 1. Build for production (auto-submits)
+yarn build:ios
+
+# 2. Or manually submit after build
+yarn submit:ios
+```
+
+### Android Production Release
+
+```bash
+# 1. Build APK for testing
+yarn build:android:apk
+
+# 2. Test APK on device
+# ...
+
+# 3. Build production AAB
+eas build --platform android --profile production
+
+# 4. Submit to Play Store
+yarn submit:android
+```
+
+## Troubleshooting
+
+### Clear Cache
+
+If you encounter build issues:
+
+```bash
+# Clear Metro bundler cache
+yarn start --clear
+
+# Clear Expo cache
+rm -rf .expo
+
+# Clear node modules and reinstall
+rm -rf node_modules
+yarn install
+
+# Regenerate native projects
+yarn prebuild
+```
+
+### Build Errors
+
+If EAS builds fail:
+
+```bash
+# Check EAS build logs
+eas build:list
+
+# View specific build
+eas build:view <build-id>
+
+# Check credentials
+eas credentials
+```
+
+### Type Errors
+
+If type checking fails:
+
+```bash
+# Check specific file
+npx tsc --noEmit path/to/file.ts
+
+# Generate types for Expo Router
+npx expo customize tsconfig.json
+```
+
+## CI/CD Integration
+
+### GitHub Actions Workflow
+
+The repository includes a CI workflow (`.github/workflows/ci.yml`) that runs:
+
+```yaml
+steps:
+  - run: yarn install
+  - run: yarn lint
+  - run: yarn type-check
+  - run: yarn pretty:check
+  - run: yarn test
+```
+
+**Status Badge**: [![CI](https://github.com/SovranBitcoin/Sovran/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/SovranBitcoin/Sovran/actions/workflows/ci.yml)
+
+## Environment Variables
+
+### EAS Build Environment
+
+Configure per-profile environments in `eas.json`:
+
+```json
+{
+  "build": {
+    "development": {
+      "env": {
+        "APP_VARIANT": "development",
+        "EXPO_NO_DEV_CLIENT": "1"
+      }
+    }
+  }
+}
+```
+
+### Local Development
+
+No `.env` file is needed for basic development. Sensitive values are stored in:
+- `expo-secure-store` - Runtime secrets
+- `eas.json` - Build secrets (use EAS Secrets for sensitive data)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="rocket" href="/development/getting-started">
+    Set up your development environment
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/development/project-structure">
+    Understand the codebase organization
+  </Card>
+  <Card title="Tech Stack" icon="layer-group" href="/development/tech-stack">
+    Learn about the technologies used
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/contributing/guidelines">
+    Contribution guidelines and workflow
+  </Card>
+</CardGroup>

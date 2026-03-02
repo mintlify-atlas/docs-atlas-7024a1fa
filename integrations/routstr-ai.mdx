@@ -1,0 +1,283 @@
+---
+title: 'Routstr AI Chat'
+description: 'Built-in AI chat with multiple models from OpenAI, Anthropic, Google, and more. Pay per message with sats.'
+icon: 'robot'
+---
+
+## Overview
+
+Sovran integrates with [Routstr](https://routstr.com) to provide direct access to leading AI models through a pay-per-use model. Chat with GPT-4, Claude, Gemini, and other models by paying with satoshis from your wallet.
+
+<Info>
+Routstr charges per message in sats based on token usage. Typical costs range from less than 1 sat to several sats per message depending on the model and message length.
+</Info>
+
+## Available Models
+
+Sovran supports multiple AI providers through Routstr:
+
+<CardGroup cols={2}>
+  <Card title="OpenAI" icon="openai">
+    GPT-4, GPT-3.5 Turbo and other OpenAI models
+  </Card>
+  <Card title="Anthropic" icon="robot">
+    Claude Sonnet, Opus and other Claude models
+  </Card>
+  <Card title="Google" icon="google">
+    Gemini Pro, Flash and other Google models
+  </Card>
+  <Card title="xAI" icon="x-twitter">
+    Grok and other xAI models
+  </Card>
+  <Card title="DeepSeek" icon="brain">
+    DeepSeek models for code and reasoning
+  </Card>
+  <Card title="Perplexity" icon="magnifying-glass">
+    Perplexity models with web search
+  </Card>
+</CardGroup>
+
+## Features
+
+### Multi-Session Support
+
+Manage multiple conversations simultaneously:
+
+- **Session Management**: Create, switch between, and delete conversation sessions
+- **Persistent History**: All messages are saved locally and synced across sessions
+- **Auto-Titling**: Sessions are automatically titled based on your first message
+
+```typescript
+// From stores/routstrStore.ts
+interface RoutstrSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  messages: RoutstrMessage[];
+}
+```
+
+### Model Selection
+
+Switch between AI models at any time:
+
+- Browse available models organized by provider
+- See pricing information (sats per 1M tokens)
+- View model capabilities and descriptions
+- Filter to text-only models or include multimodal
+
+### Wallet Integration
+
+<Steps>
+  <Step title="Create Wallet">
+    Fund your Routstr wallet by sending a Cashu token
+  </Step>
+  <Step title="Check Balance">
+    View your balance in sats or msats
+  </Step>
+  <Step title="Send Messages">
+    Messages are deducted automatically from your balance
+  </Step>
+  <Step title="Top Up">
+    Add more funds anytime by sending another token
+  </Step>
+</Steps>
+
+## Implementation Details
+
+### API Integration
+
+Sovran uses the Routstr API for all AI interactions:
+
+```typescript
+// From helper/routstr/api.ts
+const ROUTSTR_BASE_URL = 'https://api.routstr.com/v1';
+
+// Wallet operations
+export async function checkBalance(apiKey: string): Promise<BalanceResponse>
+export async function createWalletFromToken(cashuToken: string): Promise<CreateWalletResponse | null>
+export async function topUpBalance(apiKey: string, cashuToken: string): Promise<TopUpResponse>
+
+// Model operations
+export async function getModels(): Promise<RoutstrModel[]>
+export async function sendMessage(
+  apiKey: string,
+  messages: { role: 'user' | 'assistant' | 'system'; content: string }[],
+  options: { model?: string; temperature?: number; max_tokens?: number; stream?: boolean }
+)
+```
+
+### Streaming Responses
+
+Messages stream token-by-token for a responsive experience:
+
+```typescript
+// SSE stream parsing for React Native
+async function* parseSSEStream(
+  response: Response
+): AsyncGenerator<OpenAI.Chat.Completions.ChatCompletionChunk> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') return;
+        yield JSON.parse(data);
+      }
+    }
+  }
+}
+```
+
+### Model Pricing
+
+Each model includes pricing information in sats:
+
+```typescript
+interface RoutstrModel {
+  id: string;
+  name: string;
+  description: string;
+  sats_pricing: {
+    prompt: number;              // Sats per 1M input tokens
+    completion: number;          // Sats per 1M output tokens
+    request: number;             // Sats per request
+    max_cost: number;            // Maximum cost per request
+  };
+  architecture: {
+    input_modalities: string[];  // ['text', 'image', etc.]
+    output_modalities: string[]; // ['text', etc.]
+  };
+}
+```
+
+### State Management
+
+Conversation state is managed with Zustand and persisted locally:
+
+```typescript
+// From stores/routstrStore.ts
+interface RoutstrState {
+  apiKey: string | null;              // Cashu token or persistent wallet key
+  balance: number | null;             // Balance in msats
+  conversationHistory: RoutstrMessage[];
+  selectedModel: string | null;
+  sessions: RoutstrSession[];
+  currentSessionId: string | null;
+  modelsCache: ModelsCache | null;    // 5 minute TTL
+}
+```
+
+## UI Components
+
+### Sessions Panel
+
+Slide-out panel for managing conversations:
+
+```typescript
+// From components/blocks/routstr/SessionsPanel.tsx
+interface SessionsPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSessionSelect?: (sessionId: string) => void;
+  onNewSession?: () => void;
+  onRefreshBalance?: () => void;
+  onTopUp?: () => void;
+  onSwitchModel?: () => void;
+}
+```
+
+Features:
+- Animated slide-in from left (300ms duration)
+- Gesture-based closing (swipe left to dismiss)
+- User profile with avatar and balance
+- Current model indicator
+- Session list with timestamps
+
+### Model Cards
+
+Visual cards showing available AI models:
+
+```tsx
+// From app/(drawer)/(tabs)/explore/index.tsx
+const AIModelCard = ({ model }: { model: RoutstrModel }) => {
+  const { provider, modelName } = extractModelName(model);
+  const icon = getProviderIcon(provider);
+  const gradient = getProviderGradient(provider);
+
+  return (
+    <TouchableOpacity>
+      <LinearGradient colors={gradient}>
+        <Icon name={icon} />
+        <Text>{modelName}</Text>
+        <Text>{provider}</Text>
+        <Badge>{model.sats_pricing.prompt} sats/1M tokens</Badge>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+};
+```
+
+## Error Handling
+
+Routstr errors are caught and displayed with user-friendly messages:
+
+```typescript
+const FRIENDLY_MESSAGES: Record<number, string> = {
+  401: 'Authentication failed. Please check your API key.',
+  402: 'Insufficient balance. Please top up your account.',
+  429: 'Rate limit exceeded. Please wait a moment before trying again.',
+  502: 'Service temporarily unavailable. Please try again in a few minutes.',
+  503: 'Service temporarily unavailable. Please try again in a few minutes.',
+  504: 'Request timeout. The service is taking too long to respond.',
+};
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Model Selection">
+    - **Cost vs Quality**: More expensive models like GPT-4 provide better responses but cost more sats
+    - **Context Length**: Choose models with longer context windows for complex conversations
+    - **Modality**: Select text-only models for chat, multimodal for image analysis
+  </Accordion>
+
+  <Accordion title="Wallet Management">
+    - **Keep Balance**: Maintain enough sats for several messages
+    - **Top Up Regularly**: Add funds before running out to avoid interruptions
+    - **Monitor Costs**: Check pricing before sending long messages
+  </Accordion>
+
+  <Accordion title="Session Organization">
+    - **Topic-Based**: Create separate sessions for different topics
+    - **Clean Up**: Delete old sessions to keep your list organized
+    - **Descriptive Titles**: First message becomes the title, so make it descriptive
+  </Accordion>
+</AccordionGroup>
+
+## Code Reference
+
+### Source Files
+
+- `app/(drawer)/(tabs)/explore/index.tsx:17-444` - Model browsing and selection UI
+- `components/blocks/routstr/SessionsPanel.tsx:1-512` - Session management panel
+- `stores/routstrStore.ts:1-341` - State management and persistence
+- `helper/routstr/api.ts:1-422` - API client and streaming
+
+### Key Functions
+
+- `getModels()` - Fetch available AI models
+- `sendMessage()` - Send chat message with streaming
+- `createWalletFromToken()` - Create Routstr wallet from Cashu token
+- `checkBalance()` - Check current wallet balance
+- `topUpBalance()` - Add funds to wallet

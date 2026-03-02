@@ -1,0 +1,420 @@
+---
+title: 'BTCMap Integration'
+description: 'Discover Bitcoin-accepting merchants worldwide with intelligent clustering and map visualization.'
+icon: 'map-location-dot'
+---
+
+## Overview
+
+Sovran integrates with [BTCMap.org](https://btcmap.org) to display over 30,000 Bitcoin-accepting merchants worldwide. The map uses high-performance clustering powered by Mapbox Supercluster to handle large datasets smoothly.
+
+<Info>
+BTCMap data is sourced from OpenStreetMap and verified by the Bitcoin community. All merchant data is cached locally for 1 hour.
+</Info>
+
+## Features
+
+### Interactive Map
+
+<CardGroup cols={2}>
+  <Card title="Clustering" icon="layer-group">
+    Intelligent marker clustering for smooth performance
+  </Card>
+  <Card title="Categories" icon="filter">
+    Filter by food, retail, ATMs, accommodation, or services
+  </Card>
+  <Card title="Privacy" icon="shield">
+    Location is offset to protect your privacy
+  </Card>
+  <Card title="Details" icon="info-circle">
+    View payment methods, hours, and contact info
+  </Card>
+</CardGroup>
+
+### Category Filtering
+
+Filter merchants by type:
+
+| Category | Icons Included |
+|----------|----------------|
+| **Food & Drink** | Cafes, restaurants, bakeries |
+| **Retail & Shopping** | Stores, groceries, computers, jewelry |
+| **ATMs & Exchange** | Bitcoin ATMs, currency exchange |
+| **Accommodation** | Hotels, spas |
+| **Services** | Medical, pharmacy, salons, repair shops, gyms |
+
+## Implementation Details
+
+### Data Fetching
+
+Merchant data is fetched from the BTCMap API and cached locally:
+
+```typescript
+// From stores/btcMapStore.ts
+const BTCMAP_API_URL = 
+  'https://api.btcmap.org/v4/places?fields=id,lat,lon,icon,comments,boosted_until,deleted_at,updated_at&include_deleted=false';
+
+interface BTCMapPlace {
+  id: number;
+  lat: number;
+  lon: number;
+  icon: string;          // Material icon name for category
+  updated_at: string;
+}
+
+const PLACES_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+```
+
+### Clustering Algorithm
+
+Sovran uses Mapbox's Supercluster for O(log n) performance:
+
+```typescript
+// From utils/mapClustering.ts
+import Supercluster from 'supercluster';
+
+export class ClusterManager {
+  private cluster: Supercluster;
+
+  constructor(options?: Supercluster.Options) {
+    this.cluster = new Supercluster({
+      radius: 60,        // Cluster radius in pixels
+      maxZoom: 16,       // Max zoom to cluster points
+      minPoints: 2,      // Minimum points to form a cluster
+      ...options,
+    });
+  }
+
+  load(points: GeoPoint[]): void {
+    const features = points.map((p) => ({
+      type: 'Feature',
+      properties: { pointId: p.id, icon: p.icon },
+      geometry: {
+        type: 'Point',
+        coordinates: [p.lon, p.lat]
+      }
+    }));
+    this.cluster.load(features);
+  }
+
+  getClusters(bbox: [number, number, number, number], zoom: number): MapMarker[] {
+    const clusters = this.cluster.getClusters(bbox, Math.floor(zoom));
+    return clusters.map(this.convertToMarker);
+  }
+}
+```
+
+### Cluster Caching
+
+Cluster indexes are cached to avoid rebuilding on navigation:
+
+```typescript
+// From utils/btcMapClusterCache.ts
+type CacheEntry = {
+  manager: ClusterManager;
+  createdAt: number;
+  pointsCount: number;
+};
+
+const CACHE = new Map<string, CacheEntry>();
+const MAX_ENTRIES = 3;
+
+export function getOrBuildBTCMapClusterManager(
+  cacheKey: string,
+  points: GeoPoint[],
+  options?: ClusterBuildOptions
+): ClusterManager {
+  const existing = CACHE.get(cacheKey);
+  if (existing && existing.pointsCount === points.length) {
+    return existing.manager;
+  }
+
+  const manager = new ClusterManager(options);
+  manager.load(points);
+  CACHE.set(cacheKey, { manager, createdAt: Date.now(), pointsCount: points.length });
+  return manager;
+}
+```
+
+### Performance Optimizations
+
+The map uses several techniques for smooth performance:
+
+<Steps>
+  <Step title="Deferred Rendering">
+    Map rendering is delayed 50ms to allow modal animation to start
+  </Step>
+  <Step title="InteractionManager">
+    Heavy operations run after interactions complete using `InteractionManager.runAfterInteractions()`
+  </Step>
+  <Step title="Debounced Updates">
+    Marker updates are debounced 250ms during panning/zooming
+  </Step>
+  <Step title="Viewport Culling">
+    Only markers in the visible viewport (plus padding) are rendered
+  </Step>
+</Steps>
+
+```typescript
+// From app/(map-flow)/index.tsx:586-625
+const handleCameraChange = useCallback(
+  (event: { coordinates: { latitude?: number; longitude?: number }; zoom: number }) => {
+    const newLat = event.coordinates.latitude ?? prev.lat;
+    const newLon = event.coordinates.longitude ?? prev.lon;
+    const newZoom = event.zoom;
+
+    // Skip tiny movements within current zoom level
+    const zoomFloor = Math.floor(newZoom);
+    const span = 360 / Math.pow(2, Math.max(newZoom, 0));
+    const latThreshold = span * 0.12;
+    const lonThreshold = span * ASPECT_RATIO * 0.12;
+    
+    const shouldSkip = 
+      last?.zoomFloor === zoomFloor &&
+      Math.abs(newLat - last.lat) < latThreshold &&
+      Math.abs(newLon - last.lon) < lonThreshold;
+
+    if (shouldSkip) return;
+
+    // Debounce marker updates
+    clearTimeout(markerUpdateTimer);
+    markerUpdateTimer = setTimeout(() => {
+      InteractionManager.runAfterInteractions(() => {
+        updateMarkersForCamera(newLat, newLon, newZoom);
+      });
+    }, 250);
+  },
+  [updateMarkersForCamera]
+);
+```
+
+### Bounding Box Calculation
+
+Convert camera position to bounding box for cluster queries:
+
+```typescript
+// From utils/mapClustering.ts:206-232
+export function cameraToBbox(
+  lat: number,
+  lon: number,
+  zoom: number,
+  aspectRatio: number = 1,
+  padding: number = 1.0  // 100% padding to show pins outside viewport
+): [number, number, number, number] {
+  // At zoom 0, you see ~360 degrees. Each zoom level halves this.
+  const baseSpan = 360 / Math.pow(2, zoom);
+
+  const latSpan = baseSpan * (1 + padding);
+  const lonSpan = baseSpan * aspectRatio * (1 + padding);
+
+  // Clamp to valid ranges
+  const west = Math.max(-180, lon - lonSpan / 2);
+  const east = Math.min(180, lon + lonSpan / 2);
+  const south = Math.max(-85, lat - latSpan / 2);  // Web Mercator limit
+  const north = Math.min(85, lat + latSpan / 2);
+
+  return [west, south, east, north];
+}
+```
+
+## Merchant Details
+
+### Data Model
+
+Detailed merchant information includes:
+
+```typescript
+// From stores/btcMapStore.ts:16-55
+export interface BTCMapPlaceDetails {
+  id: number;
+  lat: number;
+  lon: number;
+  name?: string;
+  address?: string;
+  description?: string;
+  
+  // Payment methods
+  'osm:payment:onchain'?: string;              // 'yes' | 'no'
+  'osm:payment:lightning'?: string;            // 'yes' | 'no'
+  'osm:payment:lightning_contactless'?: string; // 'yes' | 'no'
+  
+  // Contact info (prefer osm:contact: fields)
+  'osm:contact:phone'?: string;
+  'osm:contact:website'?: string;
+  'osm:contact:email'?: string;
+  'osm:contact:instagram'?: string;
+  'osm:contact:twitter'?: string;
+  
+  // Legacy fields
+  phone?: string;
+  website?: string;
+  email?: string;
+  instagram?: string;
+  twitter?: string;
+  
+  // Other
+  opening_hours?: string;
+  verified_at?: string;
+  updated_at: string;
+}
+```
+
+### Detail Screen
+
+The detail screen displays comprehensive merchant information:
+
+```typescript
+// From app/(map-flow)/detail.tsx:62-380
+export default function MerchantDetailScreen() {
+  const { placeId } = useLocalSearchParams<{ placeId: string }>();
+  const { fetchPlaceDetails, getCachedPlaceDetails } = useBTCMapStore();
+  
+  const [place, setPlace] = useState<BTCMapPlaceDetails | null>(null);
+
+  // Check cache first, then fetch from API
+  const cached = getCachedPlaceDetails(id);
+  if (cached) {
+    setPlace(cached);
+  } else {
+    const details = await fetchPlaceDetails(id);
+    setPlace(details);
+  }
+}
+```
+
+The UI shows:
+- Payment methods (on-chain, Lightning, contactless)
+- Contact information (phone, website, email, socials)
+- Opening hours
+- Description
+- Verification status and date
+
+## Privacy Features
+
+### Location Offsetting
+
+User location is offset to prevent exact position tracking:
+
+```typescript
+// From utils/locationPrivacy.ts (referenced in map code)
+export function applySafetyOffset(
+  latitude: number,
+  longitude: number
+): { latitude: number; longitude: number } {
+  // Apply random offset so camera doesn't center on exact position
+  // Offset is consistent within session but varies between sessions
+  const offsetLat = (Math.random() - 0.5) * 0.01;  // ~1km range
+  const offsetLon = (Math.random() - 0.5) * 0.01;
+  
+  return {
+    latitude: latitude + offsetLat,
+    longitude: longitude + offsetLon
+  };
+}
+```
+
+This is applied when:
+- Centering map on user location
+- Using "My Location" button
+- Initial map load with permissions
+
+## Map Controls
+
+### Floating Action Buttons
+
+Map controls are rendered as glass-effect buttons on iOS:
+
+```typescript
+// From app/(map-flow)/index.tsx:189-282
+const FloatingActionButtons = memo(({ onMyLocation, onZoomIn, onZoomOut }) => {
+  return (
+    <VStack style={styles.floatingButtons} spacing={8}>
+      <Host style={{ height: 48, width: 48 }}>
+        <SwiftUIButton
+          modifiers={[
+            buttonStyle('glass'),
+            frame({ height: 48, width: 48 }),
+            glassEffect({ shape: 'circle', glass: { variant: 'regular' } })
+          ]}
+          onPress={onMyLocation}>
+          <SwiftUIImage systemName="location.fill" size={20} />
+        </SwiftUIButton>
+      </Host>
+      {/* Zoom buttons... */}
+    </VStack>
+  );
+});
+```
+
+### Stats Card
+
+Contextual stats with category filter:
+
+```typescript
+// From app/(map-flow)/index.tsx:121-187
+const StatsCard = memo(({ visibleCount, totalCount, category, onCategoryChange }) => {
+  return (
+    <Host style={{ width: SCREEN_WIDTH - 32 }}>
+      <ContextMenu>
+        <ContextMenu.Items>
+          {categories.map((cat) => (
+            <SwiftUIButton
+              label={cat.label}
+              onPress={() => onCategoryChange(cat)}
+            />
+          ))}
+        </ContextMenu.Items>
+        <ContextMenu.Trigger>
+          <SwiftUIButton modifiers={[glassEffect({ shape: 'capsule' })]}>
+            <SwiftUIImage systemName="bitcoinsign.circle.fill" />
+            <SwiftUIText>{visibleCount.toLocaleString()} visible</SwiftUIText>
+            <SwiftUIText>{totalCount.toLocaleString()} total • {category}</SwiftUIText>
+          </SwiftUIButton>
+        </ContextMenu.Trigger>
+      </ContextMenu>
+    </Host>
+  );
+});
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Performance">
+    - **Cache Awareness**: Cluster managers are cached per category filter
+    - **Debouncing**: Don't update markers too frequently during panning
+    - **Viewport Queries**: Only query visible markers plus reasonable padding
+    - **Progressive Loading**: Show UI immediately, defer heavy operations
+  </Accordion>
+
+  <Accordion title="UX">
+    - **Loading States**: Show skeleton/loading while fetching data
+    - **Error Handling**: Gracefully handle network failures with cached data
+    - **Cluster Expansion**: Tap cluster to zoom in and reveal individual merchants
+    - **Deep Links**: Support direct navigation to merchant details
+  </Accordion>
+
+  <Accordion title="Privacy">
+    - **Location Offsetting**: Never center map on exact user location
+    - **Permission Requests**: Request location permission gracefully
+    - **Local Storage**: Cache data locally to minimize API requests
+  </Accordion>
+</AccordionGroup>
+
+## Code Reference
+
+### Source Files
+
+- `app/(map-flow)/index.tsx:1-778` - Main map screen with clustering
+- `app/(map-flow)/detail.tsx:1-414` - Merchant detail view
+- `stores/btcMapStore.ts:1-243` - Data fetching and caching
+- `utils/mapClustering.ts:1-233` - Supercluster wrapper
+- `utils/btcMapClusterCache.ts:1-67` - Cluster manager caching
+
+### Key Functions
+
+- `fetchPlaces()` - Fetch all merchants from BTCMap API
+- `fetchPlaceDetails(id)` - Fetch detailed merchant information
+- `getClusters(bbox, zoom)` - Get clustered markers for viewport
+- `getClusterExpansionZoom(clusterId)` - Calculate zoom level to expand cluster
+- `cameraToBbox(lat, lon, zoom)` - Convert camera to bounding box

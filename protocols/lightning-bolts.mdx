@@ -1,0 +1,305 @@
+---
+title: Lightning Network (BOLT11)
+description: BOLT11 invoice support for Lightning Network payments in Sovran
+---
+
+Sovran implements comprehensive BOLT11 invoice support for Lightning Network operations, enabling users to send and receive Bitcoin payments over Lightning through Cashu mints.
+
+## BOLT11 Invoice Support
+
+The Lightning Network integration uses **BOLT11** (Basis of Lightning Technology #11) for invoice encoding and decoding.
+
+### Invoice Decoding
+
+**Library**: `@gandlaf21/bolt11-decode`
+
+Sovran decodes BOLT11 invoices to extract payment information:
+
+```typescript
+// helper/coco/utils.ts:80-88
+export function getLightningAmount(invoice: string): number {
+  try {
+    const decoded = decode(invoice);
+    const amount = decoded?.sections?.find((route) => route?.name === 'amount')?.value;
+    return amount ? amount / 1000 : 0; // Convert millisats to sats
+  } catch {
+    return 0;
+  }
+}
+```
+
+**Supported Fields**:
+- **Amount**: Extracted from invoice sections and converted from millisatoshis to satoshis
+- **Timestamp**: Creation timestamp for invoice tracking
+- **Payment hash**: Unique identifier for payment routing
+- **Expiry**: Invoice expiration time
+
+### Invoice Validation
+
+Invoices are validated before processing:
+
+```typescript
+// helper/coco/utils.ts (referenced in processing flow)
+export function isLightningInvoice(data: string): boolean {
+  try {
+    decode(data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+## Mint Quote Operations
+
+### Creating Mint Quotes (Receiving)
+
+Mint quotes generate Lightning invoices for receiving Bitcoin and converting it to ecash.
+
+**Implementation** (`hooks/coco/useLightningOperations.ts:16-32`):
+
+```typescript
+const requestLightningInvoice = async (mintUrl: string, amount: number) => {
+  setIsProcessing(true);
+  setError(null);
+
+  try {
+    return await manager.quotes.createMintQuote(mintUrl, amount);
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error('Failed to create mint quote');
+    setError(error);
+    throw error;
+  } finally {
+    setIsProcessing(false);
+  }
+};
+```
+
+**Process Flow**:
+1. User requests to receive sats at a specific mint
+2. Mint generates a BOLT11 invoice
+3. User pays invoice from external Lightning wallet
+4. Mint detects payment and issues ecash tokens
+
+### Melt Quote Operations (Sending)
+
+Melt quotes enable paying Lightning invoices with ecash tokens.
+
+**Flow** (`hooks/coco/useProcessPaymentString.ts:346-356`):
+
+```typescript
+if (isInvoice && amount) {
+  // Direct Lightning invoice with amount - navigate to MeltQuoteScreen
+  // The screen will create the quote internally
+  router.navigate({
+    pathname: '/(send-flow)/meltQuote',
+    params: {
+      invoice: trimmedData,
+    },
+  });
+  return { urInProgress: false };
+}
+```
+
+**Process Flow**:
+1. User scans/pastes BOLT11 invoice
+2. Amount is extracted from invoice
+3. Mint creates melt quote (fee estimate)
+4. User confirms payment
+5. Mint pays Lightning invoice and burns ecash
+
+<Note>
+If a BOLT11 invoice doesn't contain an amount, Sovran routes to the currency input screen (`/(send-flow)/currency`) where users can specify the amount before creating the melt quote.
+</Note>
+
+## Payment String Processing
+
+Sovran automatically detects and processes Lightning payment strings:
+
+### Supported Formats
+
+1. **BOLT11 Invoices**: `lnbc1...` or `lightning:lnbc1...`
+2. **Lightning Addresses**: `user@domain.com`
+3. **LNURL-Pay**: `lnurl1...` or `lightning:lnurl1...`
+
+**Detection Logic** (`hooks/coco/useProcessPaymentString.ts:333-368`):
+
+```typescript
+if (
+  (isLightningAddress(lnTrim(scanning.data)) ||
+    isLnurlp(lnTrim(scanning.data)) ||
+    isLightningInvoice(lnTrim(scanning.data))) &&
+  selectedMint
+) {
+  const trimmedData = lnTrim(scanning.data);
+  const amount = getLightningAmount(trimmedData);
+  const isInvoice = isLightningInvoice(trimmedData);
+
+  // Save to scan history
+  addScan(scanning.data, trimmedData, 'lightning', source);
+
+  if (isInvoice && amount) {
+    // Direct to melt quote screen
+    router.navigate({
+      pathname: '/(send-flow)/meltQuote',
+      params: { invoice: trimmedData },
+    });
+  } else {
+    // Collect amount first
+    router.navigate({
+      pathname: '/(send-flow)/currency',
+      params: {
+        to: 'meltQuote',
+        lnUrlOrAddress: trimmedData,
+        unit,
+      },
+    });
+  }
+}
+```
+
+### Input Trimming
+
+Lightning payment strings are automatically trimmed to handle various formats:
+
+```typescript
+// helper/coco/utils.ts (utility function)
+export function lnTrim(data: string): string {
+  return data.trim()
+    .replace(/^lightning:/, '')
+    .replace(/^LIGHTNING:/, '');
+}
+```
+
+## Scan History Tracking
+
+All Lightning payment operations are tracked in scan history:
+
+```typescript
+// hooks/coco/useProcessPaymentString.ts:344
+addScan(scanning.data, trimmedData, 'lightning', source);
+```
+
+**Source Types**:
+- `'qr'`: QR code scan
+- `'paste'`: Clipboard paste
+- `'deeplink'`: Deep link (cashu:// or sovran://)
+- `'nfc'`: NFC tap payment
+
+## NFC Payments
+
+Sovran supports NFC tap-to-pay for Lightning invoices:
+
+**Implementation** (`helper/nfc.ts`):
+- NDEF Type 4 Tag protocol
+- Automatic invoice detection from NFC tags
+- Mint selection with balance validation
+- Amount limit enforcement
+- Rollback handling for failed payments
+
+**Flow** (`app/(drawer)/(tabs)/index/_layout.tsx`):
+1. User taps NFC tag containing BOLT11 invoice
+2. Sovran validates mint selection and balance
+3. Creates melt quote automatically
+4. Processes payment with POS recovery support
+
+## Transaction Timelines
+
+Lightning operations show real-time progress:
+
+**Timeline Components** (`components/blocks/Transaction/`):
+- `HistoryEntryTimeline.tsx`: Step-by-step transaction progress
+- `HistoryEntryHeader.tsx`: Transaction detail headers
+- `HistoryEntryRefresh.tsx`: Status refresh component
+
+**States**:
+- Mint quotes: Countdown to expiry
+- Sends: Preparation → Finalization
+- Melts: Pending → Paid
+
+## Integration with Cashu
+
+Lightning operations integrate seamlessly with Cashu ecash:
+
+**Minting Flow**:
+```
+Bitcoin (Lightning) → BOLT11 Invoice → Mint Quote → Ecash Tokens
+```
+
+**Melting Flow**:
+```
+Ecash Tokens → Melt Quote → BOLT11 Payment → Bitcoin (Lightning)
+```
+
+**Key Components**:
+- `useLightningOperations`: Quote creation wrapper
+- `useMeltWithHistory`: Melt operations with transaction tracking
+- `useHistoryWithMelts`: Combined history view
+
+## Dependencies
+
+```json
+// package.json:50
+{
+  "@gandlaf21/bolt11-decode": "^3.1.1"
+}
+```
+
+<Info>
+BOLT11 decoding is handled by the `@gandlaf21/bolt11-decode` library, which provides reliable parsing of Lightning invoices without requiring a full Lightning node implementation.
+</Info>
+
+## Error Handling
+
+Lightning operations include comprehensive error handling:
+
+```typescript
+// hooks/coco/useLightningOperations.ts:14-44
+const [isProcessing, setIsProcessing] = useState(false);
+const [error, setError] = useState<Error | null>(null);
+
+const requestLightningInvoice = async (mintUrl: string, amount: number) => {
+  setIsProcessing(true);
+  setError(null);
+
+  try {
+    return await manager.quotes.createMintQuote(mintUrl, amount);
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error('Failed to create mint quote');
+    setError(error);
+    throw error;
+  } finally {
+    setIsProcessing(false);
+  }
+};
+```
+
+**State Management**:
+- `isProcessing`: Loading state for UI feedback
+- `error`: Error object for display
+- `reset()`: Clear error state
+
+## Reference Implementation
+
+- **Lightning Operations**: `hooks/coco/useLightningOperations.ts`
+- **BOLT11 Utils**: `helper/coco/utils.ts:29-88`
+- **Payment Processing**: `hooks/coco/useProcessPaymentString.ts:333-368`
+- **Melt Operations**: `hooks/coco/useMeltWithHistory.ts`
+- **NFC Integration**: `helper/nfc.ts`
+
+## Learn More
+
+<CardGroup cols={2}>
+  <Card title="Cashu NUTs" icon="coins" href="/protocols/cashu-nuts">
+    Explore Cashu protocol integration
+  </Card>
+  <Card title="Payment Requests" icon="paper-plane" href="/protocols/cashu-nuts#nut-18-payment-requests">
+    NUT-18 Nostr-based payment requests
+  </Card>
+  <Card title="Wallet Security" icon="shield" href="/protocols/bip-standards">
+    BIP-39 seed phrase management
+  </Card>
+  <Card title="BOLT Specifications" icon="book" href="https://github.com/lightning/bolts">
+    Official Lightning Network specifications
+  </Card>
+</CardGroup>

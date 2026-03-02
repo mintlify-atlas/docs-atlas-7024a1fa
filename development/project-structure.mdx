@@ -1,0 +1,342 @@
+---
+title: Project Structure
+description: Understand the organization of the Sovran codebase
+icon: folder-tree
+---
+
+Sovran follows a well-organized architecture that separates concerns and makes the codebase easy to navigate. This guide explains each directory and its purpose.
+
+## Root Directory Structure
+
+```
+sovran/
+├── app/                    # Expo Router file-based routing
+├── assets/                 # Static assets (images, fonts)
+├── components/             # React components
+├── config/                 # App configuration
+├── constants/              # App-wide constants
+├── helper/                 # Stateless utility functions
+├── hocs/                   # Higher-order components
+├── hooks/                  # Reusable React hooks
+├── providers/              # React context providers
+├── redux/                  # Redux store (legacy, migrating to Zustand)
+├── stores/                 # Zustand state management
+├── utils/                  # Utility functions
+├── .cursor/                # AI agent rules and documentation
+├── .maestro/               # UI test flows
+├── scripts/                # Build and automation scripts
+├── patches/                # Package patches via patch-package
+└── targets/                # Native app targets (widgets)
+```
+
+## Core Directories
+
+### `app/` - Routes & Navigation
+
+Expo Router uses file-based routing. Each file in `app/` automatically becomes a route.
+
+```
+app/
+├── _layout.tsx                    # Root layout with providers
+├── (drawer)/                      # Drawer navigation group
+│   ├── _layout.tsx                # Drawer layout
+│   └── (tabs)/                    # Tab navigation group
+│       ├── _layout.tsx            # Tab bar layout
+│       ├── index/                 # Wallet tab
+│       ├── payments/              # Payments tab
+│       └── explore/               # Explore tab
+├── (send-flow)/                   # Send payment flow
+├── (receive-flow)/                # Receive payment flow
+├── (mint-flow)/                   # Mint management flow
+│   ├── add.tsx                    # Add new mints
+│   ├── list.tsx                   # Mint list
+│   ├── info.tsx                   # Mint details
+│   ├── reviews.tsx                # Mint reviews (KYM)
+│   └── rebalancePlan.tsx          # Rebalance planning
+├── (map-flow)/                    # BTCMap integration
+│   ├── index.tsx                  # Map view
+│   └── detail.tsx                 # Merchant details
+├── (user-flow)/                   # User profile flow
+│   ├── profile.tsx                # User profile view
+│   └── share.tsx                  # Share profile
+├── (filter-flow)/                 # Transaction filters
+├── (transactions-flow)/           # Transaction details
+├── message/                       # Nostr DM system
+│   └── components/                # Message UI components
+├── settings-pages/                # Settings screens
+│   ├── theme.tsx                  # Theme selection
+│   ├── passcode.tsx               # Passcode setup
+│   ├── keyring.tsx                # P2PK key management
+│   ├── routing.tsx                # Swap routing config
+│   └── recovery.tsx               # Wallet recovery
+├── claimUsername.tsx              # Lightning address claim
+└── pendingEcash.tsx               # Pending ecash management
+```
+
+<Info>
+**Screens should be thin**: The `app/` directory focuses on route orchestration. Business logic belongs in hooks, helpers, or stores.
+</Info>
+
+### `components/` - UI Components
+
+Components are organized by abstraction level:
+
+```
+components/
+├── ui/                            # Primitive components
+│   ├── hero-transition/           # Hero transition animations
+│   └── icon-symbol.tsx            # SF Symbols wrapper
+├── blocks/                        # Composed product UI
+│   ├── AccountPagerView.tsx       # Account swiper
+│   ├── PrimaryBalance.tsx         # Balance display
+│   ├── Transactions.tsx           # Transaction list
+│   ├── Transaction/               # Transaction components
+│   │   ├── HistoryEntryTimeline.tsx
+│   │   ├── HistoryEntryHeader.tsx
+│   │   └── HistoryEntryRefresh.tsx
+│   ├── payments/                  # Payments tab components
+│   │   ├── DraggableContactsList.tsx
+│   │   └── ContactItem.tsx
+│   ├── contacts/                  # Contact search
+│   │   └── SearchResult.tsx
+│   ├── health/                    # Wallet health
+│   │   ├── WalletHealthCard.tsx
+│   │   └── WalletHealthModalContent.tsx
+│   ├── rebalance/                 # Mint rebalancing
+│   │   ├── RebalanceStepRow.tsx
+│   │   ├── rebalancePlanner.ts
+│   │   └── routing.ts
+│   ├── distribution/              # Balance distribution
+│   │   ├── DistributionSlider.tsx
+│   │   └── MintDistributionItem.tsx
+│   ├── routstr/                   # AI chat integration
+│   │   └── SessionsPanel.tsx
+│   ├── passcode/                  # Passcode UI
+│   │   ├── PasscodeScreen.tsx
+│   │   ├── NumericKeyboard.tsx
+│   │   └── PasscodeGate.tsx
+│   └── sheets/                    # Bottom sheets
+│       └── emoji-picker/          # Emoji token encoding
+├── screens/                       # Full screen components
+│   ├── SendTokenScreen.tsx        # Send screen
+│   ├── ReceiveScreen.tsx          # Receive screen
+│   ├── CameraScreen.tsx           # QR scanner
+│   ├── UserMessagesScreen.tsx     # DM conversation
+│   └── TransactionsFilterContext.tsx
+├── layouts/                       # Layout components
+├── navigation/                    # Navigation components
+└── overlays/                      # Overlay components
+```
+
+### `hooks/` - React Hooks
+
+Reusable hooks and Cashu-specific logic:
+
+```
+hooks/
+├── coco/                          # Cashu (Coco) hooks
+│   ├── useProcessPaymentString.ts # Process QR/NFC/paste/deeplink
+│   ├── useMintManagement.ts       # Load/add/remove/restore mints
+│   ├── useNostrDiscoveredMints.ts # Discover mints via Nostr
+│   ├── useSovranDiscoveredMints.ts# Discover mints via Sovran API
+│   ├── useAuditedMint.ts          # Single mint audit info
+│   ├── useAuditedMints.ts         # Batch mint audits
+│   ├── useKYMMint.ts              # Single mint KYM rating
+│   └── useKYMMints.ts             # Batch KYM ratings
+├── useSecureStore.ts              # Secure storage access
+├── useMnemonic.ts                 # Mnemonic seed management
+├── useCashuMnemonic.ts            # Cashu wallet seed
+├── useNostrProfile.ts             # Fetch Nostr profile data
+├── useNostrDirectMessage.ts       # NIP-17 DMs with NIP-44 encryption
+├── useNostrEngagement.ts          # Social engagement metrics
+├── useTransactionLocation.ts      # GPS location stamping
+├── useTransactionLocationSection.ts# Location reveal/hide state
+├── useNfcEcashPayment.tsx         # NFC payment handling
+├── useHandleCameraPermission.ts   # Camera permission flow
+├── useReservedProofs.ts           # Reserved ecash proofs
+├── useAppPendingAmount.ts         # Calculate pending balances
+├── useVersionCheck.ts             # App version checking
+└── useDeeplink.ts                 # cashu:// and sovran:// URLs
+```
+
+<Tip>
+**Cashu Integration**: The `hooks/coco/` directory contains all Cashu protocol integration logic. Always compose coco hooks rather than reimplementing them.
+</Tip>
+
+### `helper/` - Utility Functions
+
+Stateless utility functions organized by domain:
+
+```
+helper/
+├── coco/                          # Cashu integration utilities
+├── nfc/                           # NFC payment utilities
+│   └── nfc.ts                     # NDEF Type 4 Tag protocol
+├── popup/                         # Popup/toast utilities
+├── routstr/                       # Routstr AI API
+│   └── api.ts                     # API client
+├── third-party/                   # Third-party integrations
+├── secureStorage.ts               # Secure storage helper
+└── nip17.ts                       # NIP-17 gift wrap utilities
+```
+
+### `stores/` - State Management
+
+Zustand stores for global state (migrating from Redux):
+
+```
+stores/
+├── settingsStore.ts               # App settings
+├── profileStore.ts                # User profile (profile-scoped)
+├── mintStore.ts                   # Mint management
+├── mintDistributionStore.ts       # Distribution targets (basis points)
+├── pricelistStore.ts              # BTC price cache (USD/EUR/GBP)
+├── scanHistoryStore.ts            # Scan history (QR/NFC/paste/deeplink)
+├── searchHistoryStore.ts          # Search history
+├── transactionLocationStore.ts    # GPS location stamps
+├── swapTransactionsStore.ts       # Swap transaction grouping
+├── btcMapStore.ts                 # BTC Map merchant cache (24h TTL)
+├── auditMintStore.ts              # Audit data cache
+├── kymMintStore.ts                # KYM rating cache
+├── nostrSocialStore.ts            # Nostr social graph data
+├── npcMintStore.ts                # NPC mint data
+├── routstrStore.ts                # Routstr AI state
+├── popupStore.ts                  # Popup/toast queue
+└── migrateSettings.ts             # Redux → Zustand migration
+```
+
+<Note>
+**Zustand Store Scoping**: Some stores are profile-scoped, meaning they're isolated per user profile. See `.cursor/rules/zustand-store-scoping.mdc` for details.
+</Note>
+
+### `providers/` - Context Providers
+
+React context providers for app-wide state:
+
+```
+providers/
+├── ThemeProvider.tsx              # Theme context
+├── NostrKeysProvider.tsx          # BIP39 → Nostr keys (NIP-06)
+├── NostrNDKProvider.tsx           # NDK instance
+├── PricelistProvider.tsx          # BTC price updates
+├── InitializationProvider.tsx     # App initialization
+├── BackgroundProvider.tsx         # Background image themes
+└── OfflineProvider.tsx            # Network status
+```
+
+### `utils/` - Utility Modules
+
+Higher-level utilities:
+
+```
+utils/
+├── nip17.ts                       # NIP-17/NIP-59 gift wrap (rumor → seal → wrap)
+├── mapClustering.ts               # Supercluster-based clustering
+├── btcMapClusterCache.ts          # LRU cluster cache (max 3)
+└── locationPrivacy.ts             # Location privacy utilities
+```
+
+## Architecture Principles
+
+### Separation of Concerns
+
+1. **Routes** (`app/`) - Orchestration only, minimal logic
+2. **Components** (`components/`) - Pure presentation, receive data via props
+3. **Hooks** (`hooks/`) - Reusable stateful logic
+4. **Helpers** (`helper/`) - Pure functions, no side effects
+5. **Stores** (`stores/`) - Global state management
+6. **Providers** (`providers/`) - Context and initialization
+
+### Cashu Integration
+
+<Warning>
+**Source of Truth**: `coco-cashu-core` is the source of truth for Cashu types and logic.
+
+- Never redefine coco types
+- Compose coco hooks, don't reimplement them
+- Import from coco, not `@cashu/cashu-ts`
+</Warning>
+
+The integration is layered:
+- **coco-cashu-core** - Core Cashu protocol logic
+- **coco-cashu-expo-sqlite** - SQLite storage adapter
+- **coco-cashu-react** - React hooks
+- **coco-cashu-plugin-npc** - NPC plugin
+- **hooks/coco/** - App-specific Cashu hook composition
+- **helper/coco/** - App-specific Cashu utilities
+
+### State Management Evolution
+
+The app is migrating from Redux to Zustand:
+
+- **Redux** (`redux/`) - Legacy, being phased out
+- **Zustand** (`stores/`) - Current state management solution
+- **Migration** - `stores/migrateSettings.ts` handles data migration
+
+## Special Directories
+
+### `.cursor/rules/` - Agent Documentation
+
+Self-improving documentation for AI agents:
+
+```
+.cursor/rules/
+├── rules-index-authoring-guide.mdc
+├── popup-toast-sheet-guidelines.mdc
+├── secure-storage-key-derivation.mdc
+├── text-typography-skeleton-guidelines.mdc
+├── theme-system-architecture.mdc
+├── zustand-store-scoping.mdc
+└── git-github-workflow.mdc
+```
+
+These docs are updated whenever gaps, stale info, or missing patterns are discovered.
+
+### `scripts/` - Automation
+
+```
+scripts/
+├── build-background-themes.js     # Generate background themes
+├── resize-screenshots.js          # Resize app screenshots
+├── sync-screenshots.mjs           # Sync screenshots to CDN
+├── sync-altstore.mjs              # AltStore metadata sync
+├── create-freedomstore-pr.sh      # FreedomStore PR automation
+└── generate-test-vectors.ts       # Test vector generation
+```
+
+## Navigation Flow
+
+The app uses nested navigators:
+
+```
+Root (_layout.tsx)
+└── Drawer ((drawer)/_layout.tsx)
+    └── Tabs ((drawer)/(tabs)/_layout.tsx)
+        ├── Wallet Tab (index/)
+        ├── Payments Tab (payments/)
+        └── Explore Tab (explore/)
+```
+
+Modal flows use route groups:
+- `(send-flow)/` - Send payment modals
+- `(receive-flow)/` - Receive payment modals
+- `(mint-flow)/` - Mint management modals
+- `(map-flow)/` - Map view modals
+- `(user-flow)/` - User profile modals
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Tech Stack" icon="layer-group" href="/development/tech-stack">
+    Learn about the technologies used
+  </Card>
+  <Card title="Scripts Reference" icon="terminal" href="/development/scripts">
+    Complete guide to all available scripts
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="/development/getting-started">
+    Set up your development environment
+  </Card>
+  <Card title="API Reference" icon="code" href="/protocols/cashu-nuts">
+    Explore the API documentation
+  </Card>
+</CardGroup>

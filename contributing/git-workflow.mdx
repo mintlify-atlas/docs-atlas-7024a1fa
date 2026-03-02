@@ -1,0 +1,437 @@
+---
+title: Git Workflow
+description: Git workflow and commit conventions for Sovran - branching, commits, PRs, and issues
+---
+
+## Git Rules
+
+<Warning>
+  **Never commit to `main` or `master`.** If on one, branch off immediately.
+</Warning>
+
+Clean commits, PRs, and issues for a React Native / Expo codebase.
+
+## Recon (Always Run First)
+
+Before planning anything, gather full context:
+
+```bash
+git status
+git diff --stat
+git diff
+git diff --staged
+git log --oneline --decorate -n 20
+git branch --show-current
+```
+
+Then write a **3–7 bullet summary** of what changed:
+- 2–4 user-facing bullets (what the user would notice)
+- 1–3 technical bullets (architecture, perf, cleanup)
+
+This summary drives commit messages, PR body, and issue descriptions.
+
+## Branch Naming
+
+### Format
+
+```bash
+type/scope-description
+```
+
+### Examples
+
+<CodeGroup>
+```bash Feature branch
+git checkout -b feat/nfc-payment-flow
+```
+
+```bash Fix branch
+git checkout -b fix/mint-reconnect
+```
+
+```bash Refactor branch
+git checkout -b refactor/popup-engine
+```
+</CodeGroup>
+
+### Rename Branch If Scope Changes
+
+```bash
+git branch -m type/new-scope-description
+```
+
+## Commit Conventions
+
+### Format
+
+```
+type(scope): imperative subject (≤72 chars)
+
+Optional body — why, tradeoffs, edge cases.
+Keep it short. Use when subject alone isn't enough.
+```
+
+### Types
+
+| Type | Use For |
+|---|---|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `refactor` | Code restructuring (no behavior change) |
+| `perf` | Performance improvement |
+| `test` | Adding or updating tests |
+| `docs` | Documentation changes |
+| `style` | Code formatting, missing semicolons, etc. |
+| `build` | Build system or external dependencies |
+| `ci` | CI configuration and scripts |
+| `chore` | Maintenance tasks |
+
+### Scope
+
+Derive from diff paths first, then feature intent. Pick **one** primary scope per commit.
+
+<AccordionGroup>
+  <Accordion title="Known Scopes">
+    | Scope | Covers |
+    |---|---|
+    | `ui` | `components/ui/*`, general visual/layout |
+    | `app` | `app/*` top-level, offline shell, launch |
+    | `camera` | QR scanning, camera permissions |
+    | `nfc` | NFC payment flow, NFC rollback |
+    | `mint` | Mint info, trust sheets, mint selection |
+    | `npc` | NPC plugin, NPC mint store |
+    | `wallet` | Wallet operations, transaction history |
+    | `receive` | Receive flow, token redeem |
+    | `rebalance` | Rebalance operations |
+    | `transactions` | Transaction screens, details |
+    | `keyring` | P2PK key management |
+    | `keys` | Key derivation, NIP-06, NUT-13 |
+    | `profile` | Multi-profile, profile switch |
+    | `settings` | Settings pages, preferences |
+    | `home` | Dashboard widgets |
+    | `explore` | Explore tab, wallet health |
+    | `map` | Map flow, BTC Map |
+    | `lists` | Virtualized feeds |
+    | `popup` | Toast/sheet system |
+    | `theme` | Theme engine |
+    | `providers` | `providers/*`, NDK, ThemeProvider |
+    | `store` | `stores/*`, Zustand stores |
+    | `hooks` | `hooks/*` |
+    | `blocks` | `components/blocks/*` |
+    | `tx` | Transaction timeline |
+    | `widget` | iOS/Android widget |
+    | `repo` | Repo-level docs |
+    | `tooling` | Lint, knip, prettier, quality gate |
+    | `ci` | GitHub Actions, CI |
+    | `patches` | `patches/*` |
+    | `metro` | `metro.config.*` |
+    | `rules` | `.cursor/rules/*` docs |
+    | `readme` | README changes |
+  </Accordion>
+  
+  <Accordion title="Creating New Scopes">
+    **Create new scopes freely** when the change doesn't fit an existing one.
+    
+    Derive from the most specific directory or feature name — don't force-fit into the table above.
+    
+    New scopes are cheap; vague scopes are expensive.
+  </Accordion>
+</AccordionGroup>
+
+### Commit Message Examples
+
+<CodeGroup>
+```bash Feature
+feat(nfc): add NFC tap payment support
+
+Implements NDEF Type 4 Tag protocol for contactless payments.
+Includes rollback handling and POS payment recovery.
+```
+
+```bash Fix
+fix(mint): reconnect to mint after network error
+
+Previously, mint connections would timeout after a network
+error without retrying. Now retries up to 3 times with
+exponential backoff.
+```
+
+```bash Refactor
+refactor(popup): consolidate toast and sheet system
+
+Merges separate toast and sheet helpers into unified popup
+engine. No behavior change.
+```
+
+```bash Docs
+docs(rules): add NFC payment flow documentation
+```
+</CodeGroup>
+
+## When to Commit
+
+Commit if any are true:
+- ✅ UI or user behavior changed
+- ✅ Non-trivial fix, perf improvement, or refactor
+- ✅ New files added or risky logic touched (payments, keys, storage, networking)
+- ✅ Config, tooling, patches, or lockfile changed
+
+Skip only if truly trivial or user explicitly says no.
+
+## Staging
+
+Stage precisely — use `git add -p` for mixed files. Plan 2–6 commits for non-trivial work.
+
+```bash
+# Stage specific files
+git add path/to/file.ts
+
+# Interactive staging for partial changes
+git add -p path/to/file.ts
+
+# Stage all changes (use sparingly)
+git add .
+```
+
+<Warning>
+  Never commit a broken state (partial syntax, missing imports).
+</Warning>
+
+Keep deps/lockfiles/patches in separate commits:
+
+```bash
+# Separate commit for dependencies
+git add package.json yarn.lock
+git commit -m "build(deps): add expo-nfc-manager"
+
+# Then commit the feature
+git add app/nfc/
+git commit -m "feat(nfc): add NFC payment flow"
+```
+
+## Validation Gate
+
+<Warning>
+  Run **all five** before every commit.
+</Warning>
+
+```bash
+npm run lint
+npm run type-check
+npm run pretty:check
+npm run knip
+npm test
+```
+
+If formatting fails, fix with `npm run pretty` then re-check.
+
+If any other check fails, fix and `git commit --amend`.
+
+<Tip>
+  Only claim what you actually ran. Don't skip checks.
+</Tip>
+
+## Secret Scanning (Non-Negotiable)
+
+Before staging ANY file, scan diffs for secrets. **Refuse to commit** if found:
+
+<Warning>
+  Never commit these:
+</Warning>
+
+- Passwords, API keys, tokens, session cookies
+- Mnemonics (12–24 words), `xprv`, WIF, raw private keys
+- Nostr secrets (`nsec1...`), hex private keys
+- `.env` contents, credential files
+
+### If Found
+
+<Steps>
+  <Step title="Remove from diff">
+    Unstage the file and remove the secret.
+  </Step>
+  
+  <Step title="Confirm .gitignore coverage">
+    Add the file pattern to `.gitignore` if not already covered.
+  </Step>
+  
+  <Step title="Advise secret rotation">
+    If the secret was already committed, rotate it immediately.
+  </Step>
+</Steps>
+
+## Pull Requests
+
+Push and open PR when work is ready for review:
+
+```bash
+git push -u origin $(git branch --show-current)
+gh pr create --title "feat(nfc): add NFC payment support" --body "$(cat <<'EOF'
+## What / Why
+- Adds NFC tap payments for Lightning invoices and ecash
+- Users can now pay by tapping NFC-enabled POS devices
+
+## What changed
+- New `helper/nfc.ts` with NDEF Type 4 Tag protocol
+- NFC handler in wallet tab layout with mint selection
+- Rollback handling for failed NFC payments
+- POS payment recovery flow
+
+## Test plan
+1. Enable NFC on device
+2. Tap NFC-enabled POS terminal
+3. Verify payment flow completes
+4. Test rollback on payment failure
+
+## Notes / Risks
+- Requires Android 4.4+ or iOS 13+
+- NFC must be enabled in device settings
+EOF
+)"
+```
+
+### PR Rules
+
+- **Title** = final conventional commit subject (this becomes the squash-merge message)
+- **Body** is the commit message body — concise, scannable, no filler
+- Use `gh pr edit` to update if scope changes after opening
+- Link related issues: `Closes #N` or `Related: #N`
+
+### PR Template
+
+```markdown
+## What / Why
+- <2-3 bullets: problem solved or feature added>
+
+## What changed
+- <3-5 bullets: key code changes>
+
+## Test plan
+1. <concrete verification steps>
+
+## Notes / Risks
+- <anything reviewers should watch for, or "None">
+```
+
+## GitHub Issues (Rare — Unresolved Bugs Only)
+
+File an issue **only** when:
+- A bug was investigated but couldn't be fixed in the current session
+- The root cause is identified but the fix is out of scope or risky
+- A flaky behavior needs tracking for future debugging
+
+```bash
+gh issue create --title "fix(mint): connection timeout after network error" --body "$(cat <<'EOF'
+## Problem
+Mint connections timeout after a network error without retrying,
+leaving the wallet in a disconnected state.
+
+## Reproduction
+1. Connect to mint
+2. Toggle airplane mode on/off
+3. Observe connection timeout error
+4. Mint remains disconnected
+
+## Investigation so far
+- Ruled out: WebSocket library bug
+- Likely cause: Missing reconnect handler in `MintClient.ts:123`
+- Timeout occurs at 30s, no retry attempted
+
+## Relevant code
+- `helper/coco/MintClient.ts` — WebSocket connection management
+- `stores/mintStore.ts` — Mint connection state
+
+## Suggested fix
+- Add exponential backoff retry logic
+- Max 3 retries before showing error to user
+EOF
+)"
+```
+
+### Issue Rules
+
+- **Title** is a conventional commit subject (so it reads well in lists)
+- **Body** captures agent context — the investigation is the value
+- Label if `gh` labels are available: `bug`, `investigation`, `help-wanted`
+- **Never** file issues for feature requests or tasks — only unresolved bugs from the current session
+
+### Issue Template
+
+```markdown
+## Problem
+<1-2 sentences: what's broken and when it happens>
+
+## Reproduction
+1. <minimal steps>
+
+## Investigation so far
+- <what was tried, what was ruled out>
+- <root cause hypothesis if any>
+
+## Relevant code
+- `path/to/file.ts` — <what's relevant there>
+
+## Suggested fix
+- <approach if known, or "Needs further investigation">
+```
+
+## Quick Reference
+
+| Action | Command |
+|---|---|
+| New branch | `git checkout -b type/scope-desc` |
+| Stage hunks | `git add -p` |
+| Commit | `git commit -m "type(scope): subject"` |
+| Amend | `git commit --amend` |
+| Push | `git push -u origin $(git branch --show-current)` |
+| Force push (rewrite) | `git push --force-with-lease` |
+| Open PR | `gh pr create --title "..." --body "..."` |
+| Update PR | `gh pr edit --title "..." --body "..."` |
+| File issue | `gh issue create --title "..." --body "..."` |
+| View PR status | `gh pr status` |
+
+## Complete Workflow Example
+
+<Steps>
+  <Step title="Create branch">
+    ```bash
+    git checkout -b feat/nfc-payment
+    ```
+  </Step>
+  
+  <Step title="Make changes">
+    Write code following [contributing guidelines](/contributing/guidelines).
+  </Step>
+  
+  <Step title="Run quality checks">
+    ```bash
+    npm run lint
+    npm run type-check
+    npm run pretty:check
+    npm run knip
+    npm test
+    ```
+  </Step>
+  
+  <Step title="Stage changes">
+    ```bash
+    git add app/nfc/
+    ```
+  </Step>
+  
+  <Step title="Commit">
+    ```bash
+    git commit -m "feat(nfc): add NFC tap payment support
+    
+    Implements NDEF Type 4 Tag protocol for contactless payments.
+    Includes rollback handling and POS payment recovery."
+    ```
+  </Step>
+  
+  <Step title="Push and create PR">
+    ```bash
+    git push -u origin feat/nfc-payment
+    gh pr create --title "feat(nfc): add NFC tap payment support" --body "..."
+    ```
+  </Step>
+</Steps>

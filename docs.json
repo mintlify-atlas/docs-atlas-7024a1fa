@@ -1,122 +1,150 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Sovran",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#F7931A",
+    "light": "#FFB84D",
+    "dark": "#C77A15"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/sovranBitcoin/sovran"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/sovranBitcoin/sovran"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/wallet",
+              "features/lightning-payments",
+              "features/ecash-tokens",
+              "features/multi-account",
+              "features/nfc-payments",
+              "features/qr-scanner"
+            ]
+          },
+          {
+            "group": "Cashu & Mints",
+            "pages": [
+              "cashu/overview",
+              "cashu/mint-management",
+              "cashu/know-your-mint",
+              "cashu/mint-swapping",
+              "cashu/wallet-rebalancing",
+              "cashu/payment-requests"
+            ]
+          },
+          {
+            "group": "Nostr Integration",
+            "pages": [
+              "nostr/overview",
+              "nostr/identity",
+              "nostr/direct-messages",
+              "nostr/contacts",
+              "nostr/user-profiles",
+              "nostr/lightning-address"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/transaction-filters",
+              "advanced/transaction-timelines",
+              "advanced/p2pk-locking",
+              "advanced/location-stamps",
+              "advanced/pending-ecash-sweeper",
+              "advanced/swap-routing",
+              "advanced/wallet-health"
+            ]
+          },
+          {
+            "group": "Services & Integrations",
+            "pages": [
+              "integrations/routstr-ai",
+              "integrations/btcmap",
+              "integrations/deep-linking"
+            ]
+          },
+          {
+            "group": "Security & Privacy",
+            "pages": [
+              "security/overview",
+              "security/wallet-recovery",
+              "security/passcode-lock",
+              "security/key-derivation",
+              "security/privacy-features"
             ]
           },
           {
             "group": "Customization",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
-            ]
-          },
-          {
-            "group": "Writing content",
-            "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "customization/themes",
+              "customization/multi-currency",
+              "customization/settings"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Developer Guide",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Development",
             "pages": [
-              "api-reference/introduction"
+              "development/getting-started",
+              "development/project-structure",
+              "development/tech-stack",
+              "development/scripts"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Architecture",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "architecture/overview",
+              "architecture/routing",
+              "architecture/state-management",
+              "architecture/cashu-integration",
+              "architecture/nostr-integration"
+            ]
+          },
+          {
+            "group": "Protocol Support",
+            "pages": [
+              "protocols/cashu-nuts",
+              "protocols/lightning-bolts",
+              "protocols/nostr-nips",
+              "protocols/bip-standards"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/guidelines",
+              "contributing/code-quality",
+              "contributing/git-workflow"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }
